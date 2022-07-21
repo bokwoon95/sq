@@ -1,0 +1,69 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  run_sq_tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: 'user1'
+          POSTGRES_PASSWORD: 'Hunter2!'
+          POSTGRES_DB: 'sakila'
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - '5456:5432'
+      mysql:
+        image: mysql
+        env:
+          MYSQL_ROOT_PASSWORD: 'Hunter2!'
+          MYSQL_USER: 'user1'
+          MYSQL_PASSWORD: 'Hunter2!'
+          MYSQL_DATABASE: 'sakila'
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
+        ports:
+          - '3330:3306'
+      sqlserver:
+        image: 'mcr.microsoft.com/azure-sql-edge'
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Hunter2!'
+        options: >-
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P Hunter2! -Q 'select 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
+        ports:
+          - '1447:1433'
+    steps:
+      - name: Install go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '>=1.18.0'
+      - name: Clone repo
+        uses: actions/checkout@v3
+      - run: go test . -tags=fts5 -failfast -shuffle on -coverprofile coverage -race -postgres 'postgres://user1:Hunter2!@localhost:5456/sakila?sslmode=disable' -mysql 'root:Hunter2!@tcp(localhost:3330)/sakila?multiStatements=true&parseTime=true' -sqlserver 'sqlserver://sa:Hunter2!@localhost:1447'
+      - name: Convert coverage to coverage.lcov
+        uses: jandelgado/gcov2lcov-action@v1.0.0
+        with:
+          infile: coverage
+          outfile: coverage.lcov
+      - name: Upload coverage.lcov to Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: coverage.lcov
