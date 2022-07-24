@@ -3170,8 +3170,8 @@ results, err := sq.FetchAll(db, sq.
     SetDialect(sq.DialectPostgres),
     func(row *sq.Row) (Result, error) {
         result := Result{
-            City:    row.String(city.CITY),
-            Country: row.String(sq.
+            City:    row.StringField(city.CITY),
+            Country: row.StringField(sq.
                 Select(country.COUNTRY).
                 From(country).
                 Where(country.COUNTRY_ID.Eq(city.COUNTRY_ID)).
