@@ -315,14 +315,14 @@ sq.Queryf("SELECT {*} FROM actor WHERE first_name = {}", "DAN").SetDialect(sq.Di
 
 This is to generate a Postgres-compatible query, where each curly brace `{}` placeholder is replaced with a Postgres dollar placeholder (e.g. $1, $2, $3). This is the same case for the [query builder](#querybuilder-select). You can choose one of four possible dialects:
 
-- **sq.DialectSQLite**
-  - placeholders are $1, $2, $3, ...
-- **sq.DialectPostgres**
-  - placeholders are $1, $2, $3, ...
-- **sq.DialectMySQL**
-  - placeholders are ?, ?, ?, ...
-- **sq.DialectSQLServer**
-  - placeholders are @p1, @p2, @p3, ...
+```go
+const (
+    DialectSQLite    = "sqlite"    // placeholders are $1, $2, $3
+    DialectPostgres  = "postgres"  // placeholders are $1, $2, $3
+    DialectMySQL     = "mysql"     // placeholders are ?, ?, ?
+    DialectSQLServer = "sqlserver" // placeholders are @p1, @p2, @p3
+)
+```
 
 Each dialect that you pick will use the corresponding placeholder type when generating the query. [Ordinal placeholders (`{1}`, `{2}`, `{3}`) and named placeholders (`{foo}`, `{bar}`, `{baz}`)](#ordinal-named-placeholders) are also supported.
 

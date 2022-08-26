@@ -16,7 +16,7 @@ Files are written in such a way that **each successive file in the list below on
 - [**fields.go**](https://github.com/bokwoon95/sq/blob/main/fields.go)
     - All of the field types: AnyField, ArrayField, BinaryField, BooleanField, EnumField, JSONField, NumberField, StringField, UUIDField, TimeField.
     - Data types: Identifier, Timestamp.
-    - Functions: New, ArrayValue, EnumValue, JSONValue, UUIDValue.
+    - Functions: [New](https://pkg.go.dev/github.com/bokwoon95/sq#New), ArrayValue, EnumValue, JSONValue, UUIDValue.
 - [**cte.go**](https://github.com/bokwoon95/sq/blob/main/cte.go)
     - CTE represents an SQL common table expression (CTE).
     - UNION, INTERSECT, EXCEPT.
