@@ -567,7 +567,7 @@ type ACTOR struct {
 }
 ```
 
-You can then instantiate the table using sq.New() and use it to create predicates and participate in a query.
+You can then instantiate the table using [sq.New()](https://pkg.go.dev/github.com/bokwoon95/sq#New) and use it to create predicates and participate in a query.
 
 ```go
 a := sq.New[ACTOR]("a")
