@@ -152,6 +152,10 @@ _, err := sq.Exec(db, sq.
 
 For a more detailed overview, look at the [Quickstart](https://bokwoon.neocities.org/sq.html#quickstart).
 
+## Project Status
+
+sq is done for my use case (hence it may seem inactive, but it's just complete). At this point I'm just waiting for people to ask questions or file feature requests under [discussions](https://github.com/bokwoon95/sq/discussions).
+
 ## Contributing
 
 See [START\_HERE.md](https://github.com/bokwoon95/sq/blob/main/START_HERE.md).
