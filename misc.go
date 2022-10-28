@@ -537,7 +537,7 @@ func (vs SelectValues) WriteSQL(ctx context.Context, dialect string, buf *bytes.
 			if err != nil {
 				return fmt.Errorf("rowvalue #%d value #%d: %w", i+1, j+1, err)
 			}
-			if j == 0 && len(vs.Columns) > 0 {
+			if i == 0 && j < len(vs.Columns) {
 				buf.WriteString(" AS " + QuoteIdentifier(dialect, vs.Columns[j]))
 			}
 		}
