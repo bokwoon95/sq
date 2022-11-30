@@ -55,14 +55,13 @@ func TestSQLiteInsertQuery(t *testing.T) {
 		tt.item = SQLite.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			InsertInto(a).
-			ColumnValues(func(col *Column) error {
+			ColumnValues(func(col *Column){
 				// bob
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
 				// alice
 				col.SetString(a.FIRST_NAME, "alice")
 				col.SetString(a.LAST_NAME, "in wonderland")
-				return nil
 			})
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
 			" INSERT INTO actor AS a (first_name, last_name)" +
@@ -184,14 +183,13 @@ func TestPostgresInsertQuery(t *testing.T) {
 		tt.item = Postgres.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			InsertInto(a).
-			ColumnValues(func(col *Column) error {
+			ColumnValues(func(col *Column) {
 				// bob
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
 				// alice
 				col.SetString(a.FIRST_NAME, "alice")
 				col.SetString(a.LAST_NAME, "in wonderland")
-				return nil
 			})
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
 			" INSERT INTO actor AS a (first_name, last_name)" +
@@ -310,14 +308,13 @@ func TestMySQLInsertQuery(t *testing.T) {
 		var tt TestTable
 		tt.item = MySQL.
 			InsertInto(a).
-			ColumnValues(func(col *Column) error {
+			ColumnValues(func(col *Column) {
 				// bob
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
 				// alice
 				col.SetString(a.FIRST_NAME, "alice")
 				col.SetString(a.LAST_NAME, "in wonderland")
-				return nil
 			})
 		tt.wantQuery = "INSERT INTO actor (first_name, last_name)" +
 			" VALUES (?, ?), (?, ?)"
@@ -423,14 +420,13 @@ func TestSQLServerInsertQuery(t *testing.T) {
 		tt.item = SQLServer.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			InsertInto(a).
-			ColumnValues(func(col *Column) error {
+			ColumnValues(func(col *Column) {
 				// bob
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
 				// alice
 				col.SetString(a.FIRST_NAME, "alice")
 				col.SetString(a.LAST_NAME, "in wonderland")
-				return nil
 			})
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
 			" INSERT INTO actor (first_name, last_name)" +
@@ -464,11 +460,10 @@ func TestInsertQuery(t *testing.T) {
 	})
 
 	f1, f2, f3 := Expr("f1"), Expr("f2"), Expr("f3")
-	colmapper := func(col *Column) error {
+	colmapper := func(col *Column) {
 		col.Set(f1, 1)
 		col.Set(f2, 2)
 		col.Set(f3, 3)
-		return nil
 	}
 
 	notOKTests := []TestTable{{
@@ -556,7 +551,7 @@ func TestInsertQuery(t *testing.T) {
 		description: "ColumnMapper err",
 		item: InsertQuery{
 			InsertTable:  Expr("tbl"),
-			ColumnMapper: func(*Column) error { return ErrFaultySQL },
+			ColumnMapper: func(*Column) { panic(ErrFaultySQL) },
 		},
 	}, {
 		description: "CTEs err",

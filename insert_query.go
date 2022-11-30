@@ -9,7 +9,7 @@ import (
 // InsertQuery represents an SQL INSERT query.
 type InsertQuery struct {
 	Dialect      string
-	ColumnMapper func(*Column) error
+	ColumnMapper func(*Column)
 	// WITH
 	CTEs []CTE
 	// INSERT INTO
@@ -30,14 +30,14 @@ type InsertQuery struct {
 var _ Query = (*InsertQuery)(nil)
 
 // WriteSQL implements the SQLWriter interface.
-func (q InsertQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	var err error
+func (q InsertQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) (err error) {
 	if q.ColumnMapper != nil {
 		col := &Column{
 			dialect:  q.Dialect,
 			isUpdate: false,
 		}
-		err = q.ColumnMapper(col)
+		defer recoverPanic(&err)
+		q.ColumnMapper(col)
 		if err != nil {
 			return err
 		}
@@ -159,7 +159,7 @@ func (q InsertQuery) Values(values ...any) InsertQuery {
 }
 
 // ColumnValues sets the ColumnMapper field of the InsertQuery.
-func (q InsertQuery) ColumnValues(colmapper func(*Column) error) InsertQuery {
+func (q InsertQuery) ColumnValues(colmapper func(*Column)) InsertQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -317,7 +317,7 @@ func (q SQLiteInsertQuery) Values(values ...any) SQLiteInsertQuery {
 }
 
 // ColumnValues sets the ColumnMapper field of the SQLiteInsertQuery.
-func (q SQLiteInsertQuery) ColumnValues(colmapper func(*Column) error) SQLiteInsertQuery {
+func (q SQLiteInsertQuery) ColumnValues(colmapper func(*Column)) SQLiteInsertQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -418,7 +418,7 @@ func (q PostgresInsertQuery) Values(values ...any) PostgresInsertQuery {
 }
 
 // ColumnValues sets the ColumnMapper field of the PostgresInsertQuery.
-func (q PostgresInsertQuery) ColumnValues(colmapper func(*Column) error) PostgresInsertQuery {
+func (q PostgresInsertQuery) ColumnValues(colmapper func(*Column)) PostgresInsertQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -541,7 +541,7 @@ func (q MySQLInsertQuery) As(rowAlias string) MySQLInsertQuery {
 }
 
 // ColumnValues sets the ColumnMapper field of the MySQLInsertQuery.
-func (q MySQLInsertQuery) ColumnValues(colmapper func(*Column) error) MySQLInsertQuery {
+func (q MySQLInsertQuery) ColumnValues(colmapper func(*Column)) MySQLInsertQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -610,7 +610,7 @@ func (q SQLServerInsertQuery) Values(values ...any) SQLServerInsertQuery {
 }
 
 // ColumnValues sets the ColumnMapper field of the SQLServerInsertQuery.
-func (q SQLServerInsertQuery) ColumnValues(colmapper func(*Column) error) SQLServerInsertQuery {
+func (q SQLServerInsertQuery) ColumnValues(colmapper func(*Column)) SQLServerInsertQuery {
 	q.ColumnMapper = colmapper
 	return q
 }

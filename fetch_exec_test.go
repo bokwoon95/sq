@@ -26,13 +26,13 @@ type Actor struct {
 	LastUpdate time.Time
 }
 
-func (actor Actor) RowMapper(a ACTOR) func(*Row) (Actor, error) {
-	return func(row *Row) (Actor, error) {
+func (actor Actor) RowMapper(a ACTOR) func(*Row) Actor {
+	return func(row *Row) Actor {
 		actor.ActorID = row.IntField(a.ACTOR_ID)
 		actor.FirstName = row.StringField(a.FIRST_NAME)
 		actor.LastName = row.StringField(a.LAST_NAME)
 		actor.LastUpdate = row.TimeField(a.LAST_UPDATE)
-		return actor, nil
+		return actor
 	}
 }
 
@@ -69,14 +69,13 @@ func TestFetchExec(t *testing.T) {
 	// Exec
 	res, err := Exec(Log(db), SQLite.
 		InsertInto(a).
-		ColumnValues(func(col *Column) error {
+		ColumnValues(func(col *Column) {
 			for _, actor := range __actors__ {
 				col.SetInt(a.ACTOR_ID, actor.ActorID)
 				col.SetString(a.FIRST_NAME, actor.FirstName)
 				col.SetString(a.LAST_NAME, actor.LastName)
 				col.SetTime(a.LAST_UPDATE, actor.LastUpdate)
 			}
-			return nil
 		}),
 	)
 	if err != nil {
@@ -121,12 +120,11 @@ func TestCompiledFetchExec(t *testing.T) {
 	// CompiledExec
 	insertActor, err := CompileExec(SQLite.
 		InsertInto(a).
-		ColumnValues(func(col *Column) error {
+		ColumnValues(func(col *Column) {
 			col.Set(a.ACTOR_ID, IntParam("actor_id", 0))
 			col.Set(a.FIRST_NAME, StringParam("first_name", ""))
 			col.Set(a.LAST_NAME, StringParam("last_name", ""))
 			col.Set(a.LAST_UPDATE, TimeParam("last_update", time.Time{}))
-			return nil
 		}),
 	)
 	if err != nil {
@@ -187,12 +185,11 @@ func TestPreparedFetchExec(t *testing.T) {
 	// PreparedExec
 	insertActor, err := PrepareExec(Log(db), SQLite.
 		InsertInto(a).
-		ColumnValues(func(col *Column) error {
+		ColumnValues(func(col *Column) {
 			col.Set(a.ACTOR_ID, IntParam("actor_id", 0))
 			col.Set(a.FIRST_NAME, StringParam("first_name", ""))
 			col.Set(a.LAST_NAME, StringParam("last_name", ""))
 			col.Set(a.LAST_UPDATE, TimeParam("last_update", time.Time{}))
-			return nil
 		}),
 	)
 	if err != nil {

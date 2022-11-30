@@ -211,7 +211,7 @@ func Test_Array_Enum_JSON_UUID(t *testing.T) {
 			}()
 			tbl := New[SQTEST]("")
 			result, err := Exec(Log(db), InsertInto(tbl).
-				ColumnValues(func(col *Column) error {
+				ColumnValues(func(col *Column) {
 					for _, value := range sqtestValues {
 						col.SetUUID(tbl.UUID, value.uuid)
 						col.SetJSON(tbl.DATA, value.data)
@@ -222,7 +222,6 @@ func Test_Array_Enum_JSON_UUID(t *testing.T) {
 						col.SetArray(tbl.FLOAT_ARRAY, value.floatArray)
 						col.SetArray(tbl.BOOL_ARRAY, value.boolArray)
 					}
-					return nil
 				}).
 				SetDialect(tt.dialect),
 			)
@@ -233,7 +232,7 @@ func Test_Array_Enum_JSON_UUID(t *testing.T) {
 				t.Error(testutil.Callers(), diff)
 			}
 			values, err := FetchAll(VerboseLog(db), From(tbl).SetDialect(tt.dialect),
-				func(row *Row) (SqTest, error) {
+				func(row *Row) SqTest {
 					var value SqTest
 					row.UUIDField(&value.uuid, tbl.UUID)
 					row.JSONField(&value.data, tbl.DATA)
@@ -243,7 +242,7 @@ func Test_Array_Enum_JSON_UUID(t *testing.T) {
 					row.ArrayField(&value.intArray, tbl.INT_ARRAY)
 					row.ArrayField(&value.floatArray, tbl.FLOAT_ARRAY)
 					row.ArrayField(&value.boolArray, tbl.BOOL_ARRAY)
-					return value, nil
+					return value
 				},
 			)
 			if err != nil {

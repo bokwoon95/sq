@@ -60,10 +60,9 @@ func TestSQLiteUpdateQuery(t *testing.T) {
 		tt.item = SQLite.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			Update(a).
-			SetFunc(func(col *Column) error {
+			SetFunc(func(col *Column) {
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
-				return nil
 			}).
 			Where(a.ACTOR_ID.EqInt(1))
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
@@ -158,10 +157,9 @@ func TestPostgresUpdateQuery(t *testing.T) {
 		tt.item = Postgres.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			Update(a).
-			SetFunc(func(col *Column) error {
+			SetFunc(func(col *Column) {
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
-				return nil
 			}).
 			Where(a.ACTOR_ID.EqInt(1))
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
@@ -256,10 +254,9 @@ func TestMySQLUpdateQuery(t *testing.T) {
 		tt.item = MySQL.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			Update(a).
-			SetFunc(func(col *Column) error {
+			SetFunc(func(col *Column) {
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
-				return nil
 			}).
 			Where(a.ACTOR_ID.EqInt(1))
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
@@ -356,10 +353,9 @@ func TestSQLServerUpdateQuery(t *testing.T) {
 		tt.item = SQLServer.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			Update(a).
-			SetFunc(func(col *Column) error {
+			SetFunc(func(col *Column) {
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")
-				return nil
 			}).
 			Where(a.ACTOR_ID.EqInt(1))
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
@@ -410,11 +406,10 @@ func TestUpdateQuery(t *testing.T) {
 	})
 
 	f1, f2, f3 := Expr("f1"), Expr("f2"), Expr("f3")
-	colmapper := func(col *Column) error {
+	colmapper := func(col *Column) {
 		col.Set(f1, 1)
 		col.Set(f2, 2)
 		col.Set(f3, 3)
-		return nil
 	}
 
 	t.Run("PolicyTable", func(t *testing.T) {
@@ -499,7 +494,7 @@ func TestUpdateQuery(t *testing.T) {
 		description: "ColumnMapper err",
 		item: UpdateQuery{
 			UpdateTable:  Expr("tbl"),
-			ColumnMapper: func(*Column) error { return ErrFaultySQL },
+			ColumnMapper: func(*Column) { panic(ErrFaultySQL) },
 		},
 	}, {
 		description: "UpdateTable Policy err",

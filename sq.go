@@ -293,3 +293,14 @@ func writeFields(ctx context.Context, dialect string, buf *bytes.Buffer, args *[
 	}
 	return nil
 }
+
+func recoverPanic(err *error) {
+	if r := recover(); r != nil {
+		switch r := r.(type) {
+		case error:
+			*err = r
+		default:
+			*err = fmt.Errorf("rowmapper panic: %v", r)
+		}
+	}
+}

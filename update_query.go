@@ -9,7 +9,7 @@ import (
 // UpdateQuery represents an SQL UPDATE query.
 type UpdateQuery struct {
 	Dialect      string
-	ColumnMapper func(*Column) error
+	ColumnMapper func(*Column)
 	// WITH
 	CTEs []CTE
 	// UPDATE
@@ -32,14 +32,14 @@ type UpdateQuery struct {
 var _ Query = (*UpdateQuery)(nil)
 
 // WriteSQL implements the SQLWriter interface.
-func (q UpdateQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	var err error
+func (q UpdateQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) (err error) {
 	if q.ColumnMapper != nil {
 		col := &Column{
 			dialect:  q.Dialect,
 			isUpdate: true,
 		}
-		err = q.ColumnMapper(col)
+		defer recoverPanic(&err)
+		q.ColumnMapper(col)
 		if err != nil {
 			return err
 		}
@@ -205,7 +205,7 @@ func (q UpdateQuery) Set(assignments ...Assignment) UpdateQuery {
 }
 
 // SetFunc sets the ColumnMapper field of the UpdateQuery.
-func (q UpdateQuery) SetFunc(colmapper func(*Column) error) UpdateQuery {
+func (q UpdateQuery) SetFunc(colmapper func(*Column)) UpdateQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -272,7 +272,7 @@ func (q SQLiteUpdateQuery) Set(assignments ...Assignment) SQLiteUpdateQuery {
 }
 
 // SetFunc sets the ColumnMapper of the SQLiteUpdateQuery.
-func (q SQLiteUpdateQuery) SetFunc(colmapper func(*Column) error) SQLiteUpdateQuery {
+func (q SQLiteUpdateQuery) SetFunc(colmapper func(*Column)) SQLiteUpdateQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -371,7 +371,7 @@ func (q PostgresUpdateQuery) Set(assignments ...Assignment) PostgresUpdateQuery 
 }
 
 // SetFunc sets the ColumnMapper of the PostgresUpdateQuery.
-func (q PostgresUpdateQuery) SetFunc(colmapper func(*Column) error) PostgresUpdateQuery {
+func (q PostgresUpdateQuery) SetFunc(colmapper func(*Column)) PostgresUpdateQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -514,7 +514,7 @@ func (q MySQLUpdateQuery) Set(assignments ...Assignment) MySQLUpdateQuery {
 }
 
 // SetFunc sets the ColumnMapper of the MySQLUpdateQuery.
-func (q MySQLUpdateQuery) SetFunc(colmapper func(*Column) error) MySQLUpdateQuery {
+func (q MySQLUpdateQuery) SetFunc(colmapper func(*Column)) MySQLUpdateQuery {
 	q.ColumnMapper = colmapper
 	return q
 }
@@ -582,7 +582,7 @@ func (q SQLServerUpdateQuery) Set(assignments ...Assignment) SQLServerUpdateQuer
 }
 
 // SetFunc sets the ColumnMapper of the SQLServerUpdateQuery.
-func (q SQLServerUpdateQuery) SetFunc(colmapper func(*Column) error) SQLServerUpdateQuery {
+func (q SQLServerUpdateQuery) SetFunc(colmapper func(*Column)) SQLServerUpdateQuery {
 	q.ColumnMapper = colmapper
 	return q
 }

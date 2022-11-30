@@ -18,7 +18,7 @@ type Cursor[T any] struct {
 	ctx         context.Context
 	row         *Row
 	sqlRows     *sql.Rows
-	rowmapper   func(*Row) (T, error)
+	rowmapper   func(*Row) T
 	stats       QueryStats
 	logSettings LogSettings
 	logger      SqLogger
@@ -28,16 +28,16 @@ type Cursor[T any] struct {
 }
 
 // FetchCursor returns a new cursor.
-func FetchCursor[T any](db DB, q Query, rowmapper func(*Row) (T, error)) (*Cursor[T], error) {
+func FetchCursor[T any](db DB, q Query, rowmapper func(*Row) T) (*Cursor[T], error) {
 	return fetchCursor(context.Background(), db, q, rowmapper, 1)
 }
 
 // FetchCursorContext is like FetchCursor but additionally requires a context.Context.
-func FetchCursorContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) (T, error)) (*Cursor[T], error) {
+func FetchCursorContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) (*Cursor[T], error) {
 	return fetchCursor(ctx, db, q, rowmapper, 1)
 }
 
-func fetchCursor[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) (T, error), skip int) (c *Cursor[T], err error) {
+func fetchCursor[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T, skip int) (c *Cursor[T], err error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
@@ -52,11 +52,8 @@ func fetchCursor[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row
 	// Get fields and dest from rowmapper
 	dialect := q.GetDialect()
 	c.row = newRow(dialect)
-	defer recoverRowmapperPanic(&err)
-	_, err = c.rowmapper(c.row)
-	if err != nil {
-		return nil, err
-	}
+	defer recoverPanic(&err)
+	_ = c.rowmapper(c.row)
 	c.row.active = true
 	if len(c.row.fields) == 0 || len(c.row.dest) == 0 {
 		return nil, fmt.Errorf("rowmapper did not yield any fields")
@@ -196,8 +193,8 @@ func (c *Cursor[T]) Result() (result T, err error) {
 		}
 	}
 	c.row.index = 0
-	defer recoverRowmapperPanic(&err)
-	result, c.stats.Err = c.rowmapper(c.row)
+	defer recoverPanic(&err)
+	result = c.rowmapper(c.row)
 	if c.stats.Err != nil {
 		c.log()
 		return result, c.stats.Err
@@ -237,7 +234,7 @@ func (c *Cursor[T]) Close() error {
 
 // FetchOne returns the first result from running the given Query on the given
 // DB.
-func FetchOne[T any](db DB, q Query, rowmapper func(*Row) (T, error)) (T, error) {
+func FetchOne[T any](db DB, q Query, rowmapper func(*Row) T) (T, error) {
 	cursor, err := fetchCursor(context.Background(), db, q, rowmapper, 1)
 	if err != nil {
 		return *new(T), err
@@ -247,7 +244,7 @@ func FetchOne[T any](db DB, q Query, rowmapper func(*Row) (T, error)) (T, error)
 }
 
 // FetchOneContext is like FetchOne but additionally requires a context.Context.
-func FetchOneContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) (T, error)) (T, error) {
+func FetchOneContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) (T, error) {
 	cursor, err := fetchCursor(ctx, db, q, rowmapper, 1)
 	if err != nil {
 		return *new(T), err
@@ -257,7 +254,7 @@ func FetchOneContext[T any](ctx context.Context, db DB, q Query, rowmapper func(
 }
 
 // FetchAll returns all results from running the given Query on the given DB.
-func FetchAll[T any](db DB, q Query, rowmapper func(*Row) (T, error)) ([]T, error) {
+func FetchAll[T any](db DB, q Query, rowmapper func(*Row) T) ([]T, error) {
 	cursor, err := fetchCursor(context.Background(), db, q, rowmapper, 1)
 	if err != nil {
 		return nil, err
@@ -267,7 +264,7 @@ func FetchAll[T any](db DB, q Query, rowmapper func(*Row) (T, error)) ([]T, erro
 }
 
 // FetchAllContext is like FetchAll but additionally requires a context.Context.
-func FetchAllContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) (T, error)) ([]T, error) {
+func FetchAllContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) ([]T, error) {
 	cursor, err := fetchCursor(ctx, db, q, rowmapper, 1)
 	if err != nil {
 		return nil, err
@@ -283,11 +280,11 @@ type CompiledFetch[T any] struct {
 	query     string
 	args      []any
 	params    map[string][]int
-	rowmapper func(*Row) (T, error)
+	rowmapper func(*Row) T
 }
 
 // NewCompiledFetch returns a new CompiledFetch.
-func NewCompiledFetch[T any](dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) (T, error)) *CompiledFetch[T] {
+func NewCompiledFetch[T any](dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) T) *CompiledFetch[T] {
 	return &CompiledFetch[T]{
 		dialect:   dialect,
 		query:     query,
@@ -298,12 +295,12 @@ func NewCompiledFetch[T any](dialect string, query string, args []any, params ma
 }
 
 // CompileFetch returns a new CompileFetch.
-func CompileFetch[T any](q Query, rowmapper func(*Row) (T, error)) (*CompiledFetch[T], error) {
+func CompileFetch[T any](q Query, rowmapper func(*Row) T) (*CompiledFetch[T], error) {
 	return CompileFetchContext(context.Background(), q, rowmapper)
 }
 
 // CompileFetchContext is like CompileFetch but accpets a context.Context.
-func CompileFetchContext[T any](ctx context.Context, q Query, rowmapper func(*Row) (T, error)) (f *CompiledFetch[T], err error) {
+func CompileFetchContext[T any](ctx context.Context, q Query, rowmapper func(*Row) T) (f *CompiledFetch[T], err error) {
 	if q == nil {
 		return nil, fmt.Errorf("query is nil")
 	}
@@ -314,11 +311,8 @@ func CompileFetchContext[T any](ctx context.Context, q Query, rowmapper func(*Ro
 	// Get fields from rowmapper
 	dialect := q.GetDialect()
 	row := newRow(dialect)
-	defer recoverRowmapperPanic(&err)
-	_, err = rowmapper(row)
-	if err != nil {
-		return nil, err
-	}
+	defer recoverPanic(&err)
+	_ = rowmapper(row)
 	if len(row.fields) == 0 {
 		return nil, fmt.Errorf("rowmapper did not yield any fields")
 	}
@@ -366,8 +360,8 @@ func (f *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, params Params
 
 	// Get fields and dest from rowmapper
 	c.row = newRow(f.dialect)
-	defer recoverRowmapperPanic(&err)
-	_, err = c.rowmapper(c.row)
+	defer recoverPanic(&err)
+	_ = c.rowmapper(c.row)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +450,7 @@ func (f *CompiledFetch[T]) FetchAllContext(ctx context.Context, db DB, params Pa
 
 // GetSQL returns a copy of the dialect, query, args, params and rowmapper that
 // make up the CompiledFetch.
-func (f *CompiledFetch[T]) GetSQL() (dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) (T, error)) {
+func (f *CompiledFetch[T]) GetSQL() (dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) T) {
 	dialect = f.dialect
 	query = f.query
 	args = make([]any, len(f.args))
@@ -501,12 +495,12 @@ type PreparedFetch[T any] struct {
 }
 
 // PrepareFetch returns a new PreparedFetch.
-func PrepareFetch[T any](db DB, q Query, rowmapper func(*Row) (T, error)) (*PreparedFetch[T], error) {
+func PrepareFetch[T any](db DB, q Query, rowmapper func(*Row) T) (*PreparedFetch[T], error) {
 	return PrepareFetchContext(context.Background(), db, q, rowmapper)
 }
 
 // PrepareFetchContext is like PrepareFetch but additionally requires a context.Context.
-func PrepareFetchContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) (T, error)) (*PreparedFetch[T], error) {
+func PrepareFetchContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) (*PreparedFetch[T], error) {
 	compiledFetch, err := CompileFetchContext(ctx, q, rowmapper)
 	if err != nil {
 		return nil, err
@@ -539,8 +533,8 @@ func (f *PreparedFetch[T]) fetchCursor(ctx context.Context, params Params, skip 
 
 	// Get fields and dest from rowmapper
 	c.row = newRow(f.compiled.dialect)
-	defer recoverRowmapperPanic(&err)
-	_, err = c.rowmapper(c.row)
+	defer recoverPanic(&err)
+	_ = c.rowmapper(c.row)
 	if err != nil {
 		return nil, err
 	}
@@ -911,17 +905,6 @@ func (e *PreparedExec) exec(ctx context.Context, params Params, skip int) (resul
 		return result, stats.Err
 	}
 	return execResult(res, &stats)
-}
-
-func recoverRowmapperPanic(err *error) {
-	if r := recover(); r != nil {
-		switch r := r.(type) {
-		case error:
-			*err = r
-		default:
-			*err = fmt.Errorf("rowmapper panic: %v", r)
-		}
-	}
 }
 
 func getFieldNames(ctx context.Context, dialect string, fields []Field) []string {
