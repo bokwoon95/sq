@@ -87,14 +87,13 @@ actors, err := sq.FetchAll(db, sq.
         []int{1, 2, 3, 4, 5},
     ).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:     row.Int("a.actor_id"),
             FirstName:   row.String("a.first_name"),
             LastName:    row.String("a.last_name"),
             LastUpdate:  row.Time("a.last_update"),
         }
-        return actor, nil
     },
 )
 ```
@@ -109,14 +108,13 @@ actors, err := sq.FetchAll(db, sq.
     From(a).
     Where(a.ACTOR_ID.In([]int{1, 2, 3, 4, 5})).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:     row.IntField(a.ACTOR_ID),
             FirstName:   row.StringField(a.FIRST_NAME),
             LastName:    row.StringField(a.LAST_NAME),
             LastUpdate:  row.TimeField(a.LAST_UPDATE),
         }
-        return actor, nil
     },
 )
 ```
