@@ -1,7 +1,7 @@
 # sq (Structured Query)
 
 <center>
-  <img src="https://i.imgur.com/ykNZDyx.png" title="code example of a select query using sq" alt="code example of a select query using sq, to give viewers a quick idea of what the library is about" style="max-width:90%;">
+  <img src="https://i.imgur.com/GAxInSb.png" title="code example of a select query using sq" alt="code example of a select query using sq, to give viewers a quick idea of what the library is about" style="max-width:90%;">
 </center>
 
 ## Introduction to sq #introduction
@@ -72,13 +72,12 @@ SELECT actor_id, first_name, last_name FROM actor WHERE first_name = 'DAN'
 actors, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM actor WHERE first_name = {}", "DAN").
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.Int("actor_id"),
             FirstName: row.String("first_name"),
             LastName:  row.String("last_name"),
         }
-        return actor, nil
     },
 )
 ```
@@ -93,13 +92,12 @@ SELECT actor_id, first_name, last_name FROM actor WHERE actor_id = 18
 actor, err := sq.FetchOne(db, sq.
     Queryf("SELECT {*} FROM actor WHERE actor_id = {}", 18).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.Int("actor_id"),
             FirstName: row.String("first_name"),
             LastName:  row.String("last_name"),
         }
-        return actor, nil
     },
 )
 ```
@@ -114,13 +112,12 @@ SELECT actor_id, first_name, last_name FROM actor WHERE first_name = 'DAN'
 cursor, err := sq.FetchCursor(db, sq.
     Queryf("SELECT {*} FROM actor WHERE first_name = {}", "DAN").
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.Int("actor_id"),
             FirstName: row.String("first_name"),
             LastName:  row.String("last_name"),
         }
-        return actor, nil
     },
 )
 if err != nil {
@@ -221,20 +218,45 @@ _, err := sq.Exec(db, sq.
 The [FetchAll/FetchOne/FetchCursor examples in the quickstart](#rawsql-select) use a rowmapper function both as a way of indicating what fields should be selected, as well as encoding how each row should be procedurally mapped back to a model struct.
 
 ```go
-// The rowmapper function signature should match func(*sq.Row) (T, error).
-func(row *sq.Row) (Actor, error) {
-    actor := Actor{
+// The rowmapper function signature should match func(*sq.Row) T.
+func(row *sq.Row) Actor {
+    return Actor{
         ActorID:   row.Int("actor_id"),
         FirstName: row.String("first_name"),
         LastName:  row.String("last_name"),
     }
-    return actor, nil
 }
 ```
 
 To go into greater detail, the rowmapper is first called in "passive mode" where the `sq.Row` records the fields needed by the SELECT query. Those fields are then injected back into the SELECT query ([via the `{*}` insertion point](#rawsql-select)) and the query is run for real. Then the rowmapper is called in "active mode" where each `sq.Row` method call actually returns a value from the underlying row. The `Actor` result returned by each rowmapper call is then appended into a slice. All this is done generically, so the rowmapper can yield any variable of type `T` and a slice `[]T` will be returned at the end.
 
 **The order in which you call the `sq.Row` methods must be deterministic and must not change between rowmapper invocations**. Don't put an `row.Int()` call inside an if-block, for example.
+
+### Handling errors #rowmapper-handling-errors
+
+If you do any computation in a rowmapper that returns an error, you can panic() with it and the error will be propagated as the error return value of FetchAll/FetchOne/FetchCursor. Try not to do anything that returns an error in the rowmapper.
+
+```go
+func(row *sq.Row) Film {
+    var film Film
+    film.FilmID = row.Int("film_id")
+    film.Title = row.String("title")
+    film.Description = row.String("description")
+
+    // Pull raw bytes from the DB and unmarshal as JSON.
+    b := row.Bytes("special_features")
+    err := json.Unmarshal(b, &film.SpecialFeatures)
+    if err != nil {
+        panic(err)
+    }
+
+    // Alternatively you can use row.JSON(), which doesn't
+    // require you to do error handling.
+    row.JSON(&film.SpecialFeatures, "special_features")
+
+    return film
+}
+```
 
 ### Available methods #sq-row-methods
 
@@ -275,7 +297,7 @@ row.Array(sliceDest, "field_name")
 row.JSON(jsonDest, "field_name")
 
 // row.UUID scans the value of field_name into a destination pointer whose
-underlying type must be [16]byte. The value can be BINARY(16) or a UUID string.
+// underlying type must be [16]byte. The value can be BINARY(16) or a UUID string.
 row.UUID(uuidDest, "field_name")
 ```
 
@@ -685,13 +707,12 @@ actors, err := sq.FetchAll(db, sq.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:    row.IntField(a.ACTOR_ID),
             FirstName:  row.StringField(a.FIRST_NAME),
             LastName:   row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -708,13 +729,12 @@ actor, err := sq.FetchOne(db, sq.
     From(a).
     Where(a.ACTOR_ID.EqInt(18)).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:    row.IntField(a.ACTOR_ID),
             FirstName:  row.StringField(a.FIRST_NAME),
             LastName:   row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -731,13 +751,12 @@ cursor, err := sq.FetchCursor(db, sq.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:    row.IntField(a.ACTOR_ID),
             FirstName:  row.StringField(a.FIRST_NAME),
             LastName:   row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 if err != nil {
@@ -781,8 +800,8 @@ firstNames, err := sq.FetchAll(db, sq.
     SelectDistinct().
     From(a).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (string, error) {
-        return row.String(a.FIRST_NAME), nil
+    func(row *sq.Row) string {
+        return row.String(a.FIRST_NAME)
     },
 )
 ```
@@ -1123,13 +1142,12 @@ actors, err := sq.FetchAll(db, sq.SQLite.
     Values("PENELOPE", "GUINESS").
     Values("NICK", "WAHLBERG").
     Values("ED", "CHASE"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1315,12 +1333,11 @@ actors, err := sq.FetchAll(db, sq.Postgres.
     From(a).
     DistinctOn(a.FIRST_NAME).
     OrderBy(a.FIRST_NAME),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             FirstName: row.String(a.FIRST_NAME),
             LastName:  row.String(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1340,8 +1357,8 @@ firstNames, err := sq.FetchAll(db, sq.Postgres.
     From(a).
     Offset(5).
     FetchNext(10).WithTies(),
-    func(row *sq.Row) (string, error) {
-        return row.String(a.FIRST_NAME), nil
+    func(row *sq.Row) string {
+        return row.String(a.FIRST_NAME)
     },
 )
 ```
@@ -1362,13 +1379,12 @@ actors, err := sq.FetchAll(db, sq.Postgres.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     LockRows("FOR UPDATE SKIP LOCKED"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1387,13 +1403,12 @@ actors, err := sq.FetchAll(db, sq.Postgres.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     LockRows("FOR SHARE"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1419,13 +1434,12 @@ actors, err := sq.FetchAll(db, sq.Postgres.
     Values("PENELOPE", "GUINESS").
     Values("NICK", "WAHLBERG").
     Values("ED", "CHASE"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1584,13 +1598,12 @@ actors, err := sq.FetchAll(db, sq.MySQL.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     LockRows("FOR UPDATE SKIP LOCKED"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1609,13 +1622,12 @@ actors, err := sq.FetchAll(db, sq.MySQL.
     From(a).
     Where(a.FIRST_NAME.EqString("DAN")).
     LockRows("FOR SHARE"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -1847,8 +1859,8 @@ a := sq.New[ACTOR]("a")
 firstNames, err := sq.FetchAll(db, sq.SQLServer.
     From(a).
     Top(10).WithTies(),
-    func(row *sq.Row) (string, error) {
-        return row.String(a.FIRST_NAME), nil
+    func(row *sq.Row) string {
+        return row.String(a.FIRST_NAME)
     },
 )
 ```
@@ -1874,13 +1886,12 @@ actors, err := sq.FetchAll(db, sq.SQLServer.
     Values("PENELOPE", "GUINESS").
     Values("NICK", "WAHLBERG").
     Values("ED", "CHASE"),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 ```
@@ -2127,12 +2138,12 @@ _, err := sq.Exec(db, sq.
 posts, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM posts WHERE post_id IN ({})", []int{1, 2, 3}).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Post, error) {
+    func(row *sq.Row) Post {
         var post Post
         post.Title = row.String("title")
         post.Body = row.String("body")
         row.Array(&post.Tags, "tags")
-        return post, nil
+        return post
     },
 )
 
@@ -2142,12 +2153,12 @@ posts, err := sq.FetchAll(db, sq.
     From(p).
     Where(p.POST_ID.In([]int{1, 2, 3})).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Post, error) {
+    func(row *sq.Row) Post {
         var post Post
         post.Title = row.StringField(p.TITLE)
         post.Body = row.StringField(p.BODY)
         row.ArrayField(&post.Tags, p.TAGS)
-        return post, nil
+        return post
     },
 )
 ```
@@ -2241,11 +2252,11 @@ _, err := sq.Exec(db, sq.
 fruits, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM fruits WHERE fruit_id IN ({})", []int{1, 2, 3}).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Fruit, error) {
+    func(row *sq.Row) Fruit {
         var fruit Fruit
         fruit.Name = row.String("name")
         row.Enum(&fruit.Color, "color")
-        return fruit, nil
+        return fruit
     },
 )
 
@@ -2255,11 +2266,11 @@ posts, err := sq.FetchAll(db, sq.
     From(f).
     Where(f.FRUIT_ID.In([]int{1, 2, 3})).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Fruit, error) {
+    func(row *sq.Row) Fruit {
         var fruit Fruit
         fruit.Name = row.StringField(f.NAME)
         row.EnumField(&fruit.Color, f.COLOR)
-        return fruit, nil
+        return fruit
     },
 )
 ```
@@ -2315,12 +2326,12 @@ _, err := sq.Exec(db, sq.
 products, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM products WHERE product_id IN ({})", []int{1, 2, 3}).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Product, error) {
+    func(row *sq.Row) Product {
         var product Product
         product.Name = row.String("name")
         product.Price = row.Float64("price")
         row.JSON(&product.Attributes, "attributes")
-        return product, nil
+        return product
     },
 )
 
@@ -2330,12 +2341,12 @@ posts, err := sq.FetchAll(db, sq.
     From(p).
     Where(p.PRODUCT_ID.In([]int{1, 2, 3})).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Product, error) {
+    func(row *sq.Row) Product {
         var product Product
         product.Name = row.StringField(p.NAME)
         product.Price = row.Float64Field(p.PRICE)
         row.JSONField(&product.Attributes, p.ATTRIBUTES)
-        return product, nil
+        return product
     },
 )
 ```
@@ -2389,12 +2400,12 @@ _, err := sq.Exec(db, sq.
 users, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM users WHERE email IS NOT NULL").
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (User, error) {
+    func(row *sq.Row) User {
         var user User
         row.UUID(&user.UserID, "user_id")
         user.Name = row.String("name")
         user.Email = row.String("email")
-        return user, nil
+        return user
     },
 )
 
@@ -2404,12 +2415,12 @@ posts, err := sq.FetchAll(db, sq.
     From(u).
     Where(u.EMAIL.IsNotNull()).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (User, error) {
+    func(row *sq.Row) User {
         var user User
         row.UUIDField(&user.UserID, u.USER_ID)
         user.Name = row.StringField(u.NAME)
         user.Email = row.StringField(u.EMAIL)
-        return user, nil
+        return user
     },
 )
 ```
@@ -2424,8 +2435,8 @@ Queries can be logged wrapping the database with `sq.Log()` or `sq.VerboseLog()`
 // With logging                    ↓ wrap the db
 firstName, err := sq.FetchOne(sq.Log(db), sq.
     Queryf("SELECT {*} FROM actor WHERE last_name IN ({})", []string{"AKROYD", "ALLEN", "WILLIAMS"}),
-    func(row *sq.Row) (string, error) {
-        return row.String("first_name"), nil
+    func(row *sq.Row) string {
+        return row.String("first_name")
     },
 )
 ```
@@ -2440,8 +2451,8 @@ firstName, err := sq.FetchOne(sq.Log(db), sq.
 // With verbose logging                ↓ wrap the db
 firstName, err := sq.FetchOne(sq.VerboseLog(db), sq.
     Queryf("SELECT {*} FROM actor WHERE last_name IN ({})", []string{"AKROYD", "ALLEN", "WILLIAMS"}),
-    func(row *sq.Row) (string, error) {
-        return row.String("first_name"), nil
+    func(row *sq.Row) string {
+        return row.String("first_name")
     },
 )
 ```
@@ -2501,13 +2512,12 @@ func (db MyDB) SqLogQuery(ctx context.Context, stats sq.QueryStats) {
 actors, err := sq.FetchAll(myDB, sq.
     Queryf("SELECT {*} FROM actor WHERE first_name = {}", "DAN").
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.Int("actor_id"),
             FirstName: row.String("first_name"),
             LastName:  row.String("last_name"),
         }
-        return actor, nil
     },
 )
 ```
@@ -2735,13 +2745,12 @@ q, err := sq.CompileFetch(sq.
         sql.Named("last_name", nil),  // last_name is a rebindable param, with default value nil
     ).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField("actor_id"),
             FirstName: row.StringFIeld("first_name"),
             LastName:  row.StringFIeld("last_name"),
         }
-        return actor, nil
     },
 )
 if err != nil {
@@ -2775,13 +2784,12 @@ var getActor = func() *sq.CompiledFetch[ACTOR] {
             a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0)),
         ).
         SetDialect(sq.DialectPostgres),
-        func(row *sq.Row) (Actor, error) {
-            actor := Actor{
+        func(row *sq.Row) Actor {
+            return Actor{
                 ActorID:   row.IntField(a.ACTOR_ID),
                 FirstName: row.StringField(a.FIRST_NAME),
                 LastName:  row.StringField(a.LAST_NAME),
             }
-            return actor, nil
         },
     )
     if err != nil {
@@ -2867,13 +2875,12 @@ compiledQuery, err := sq.CompileFetch(sq.
     From(a).
     Where(a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0))).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Actor, error) {
-        actor := Actor{
+    func(row *sq.Row) Actor {
+        return Actor{
             ActorID:   row.IntField(a.ACTOR_ID),
             FirstName: row.StringField(a.FIRST_NAME),
             LastName:  row.StringField(a.LAST_NAME),
         }
-        return actor, nil
     },
 )
 if err != nil {
@@ -2955,8 +2962,8 @@ e := sq.New[EMPLOYEES]("")
 
 // Query 1
 names, err := sq.FetchAllContext(ctx, db, sq.From(e),
-    func(row *sq.Row) (string, error) {
-        return row.String(e.NAME), nil
+    func(row *sq.Row) string {
+        return row.String(e.NAME)
     },
 )
 // SELECT employees.name FROM employees WHERE employees.tenant_id = 1
@@ -3102,13 +3109,12 @@ customers, err := sq.FetchAll(db, sq.
         Having(sq.Expr("COUNT(*) > 2")),
     )).
     OrderBy(c.FIRST_NAME, c.LAST_NAME),
-    func(row *sq.Row) (Customer, error) {
-        customer := Customer{
+    func(row *sq.Row) Customer {
+        return Customer{
             CustomerID: row.Int(c.CUSTOMER_ID),
             FirstName:  row.String(c.FIRST_NAME),
             LastName:   row.String(c.LAST_NAME),
         }
-        return customer, nil
     },
 )
 ```
@@ -3134,12 +3140,11 @@ products, err := sq.FetchAll(db, sq.
         From(od).
         Where(p.PRODUCT_ID.Eq(od.PRODUCT_ID)),
     )),
-    func(row *sq.Row) (Product, error) {
-        product := Product{
+    func(row *sq.Row) Product {
+        return Product{
             ProductID:   row.Int(p.PRODUCT_ID),
             ProductName: row.String(p.PRODUCT_NAME),
         }
-        return product, nil
     },
 )
 ```
@@ -3168,8 +3173,8 @@ results, err := sq.FetchAll(db, sq.
     From(city).
     Where(city.CITY.EqString("Vancouver")).
     SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) (Result, error) {
-        result := Result{
+    func(row *sq.Row) Result {
+        return Result{
             City:    row.StringField(city.CITY),
             Country: row.StringField(sq.
                 Select(country.COUNTRY).
@@ -3178,7 +3183,6 @@ results, err := sq.FetchAll(db, sq.
                 As("country"),
             ),
         }
-        return result, nil
     },
 )
 ```
@@ -3213,12 +3217,11 @@ film_stats := sq.Postgres.
 results, err := sq.FetchAll(db, sq.
     From(film).
     Join(film_stats, film_stats.Field("field_id").Eq(film.FILM_ID)),
-    func(row *sq.Row) (Result, error) {
-        result := Result{
+    func(row *sq.Row) Result {
+        return Result{
             Title:      row.String(film.TITLE),
             ActorCount: row.Int(film_stats.Field("actor_count")),
         }
-        return result, nil
     },
 )
 ```
@@ -3257,12 +3260,11 @@ results, err := sq.FetchAll(db, sq.Postgres.
     With(film_stats).
     From(film).
     Join(film_stats, film_stats.Field("field_id").Eq(film.FILM_ID)),
-    func(row *sq.Row) (Result, error) {
-        result := Result{
+    func(row *sq.Row) Result {
+        return Result{
             Title:      row.String(film.TITLE),
             ActorCount: row.Int(film_stats.Field("actor_count")),
         }
-        return result, nil
     },
 )
 ```
