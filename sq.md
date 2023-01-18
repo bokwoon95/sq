@@ -3684,7 +3684,7 @@ import "github.com/bokwoon95/sq"
 a := sq.New[ACTOR]("a")
 field := sq.Expr("{} || ' ' || {}", a.FIRST_NAME, a.LAST_NAME)
 predicate := sq.Expr("{} + INTERVAL '1 hour' < CURRENT_TIMESTAMP", a.LAST_UPDATE)
-sq.Select(field).From(a).Where(predicate)
+sq.Postgres.Select(field).From(a).Where(predicate)
 ```
 
 ### Logging #logging-changes
@@ -3704,7 +3704,7 @@ err := sq.WithDefaultLog().From(tbl).Where(predicate).Selectx(mapper, accumulato
 ```go
 import "github.com/bokwoon95/sq"
 
-results, err := sq.FetchAll(sq.Log(db), sq.From(tbl).Where(predicate))
+results, err := sq.FetchAll(sq.Log(db), sq.Postgres.From(tbl).Where(predicate))
 ```
 
 ### Generating type-safe wrappers of PL/pgSQL functions has been removed #generated-plpgsql-function-changes
@@ -3724,5 +3724,5 @@ sq.Select(ADD_NUMS(1, 2)) // ADD_NUMS is code-generated.
 ```go
 import "github.com/bokwoon95/sq"
 
-sq.Select(sq.Expr("add_nums({}, {})", 1, 2))
+sq.Postgres.Select(sq.Expr("add_nums({}, {})", 1, 2))
 ```
