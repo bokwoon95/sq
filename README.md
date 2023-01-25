@@ -9,7 +9,7 @@
 
 [one-page documentation](https://bokwoon.neocities.org/sq.html)
 
-sq is a type-safe data mapper and query builder for Go. Its concept is simple: you provide a callback function that maps a row to a struct, generics ensure that you get back a slice of structs at the end. Additionally, mentioning a column in the callback function automatically adds it to the SELECT clause so you don't even have to explicitly mention what columns you want to select: the act of mapping a column is the same as selecting it. This eliminates a source of errors where you have specify the columns twice (once in the query itself, once to the call to rows.Scan) and end up missing a column, getting the column order wrong or mistyping a column name.
+sq is a type-safe data mapper and query builder for Go. Its concept is simple: you provide a callback function that maps a row to a struct, generics ensure that you get back a slice of structs at the end. Additionally, mentioning a column in the callback function automatically adds it to the SELECT clause so you don't even have to explicitly mention what columns you want to select: the [act of mapping a column is the same as selecting it](#select-example-raw-sql). This eliminates a source of errors where you have specify the columns twice (once in the query itself, once to the call to rows.Scan) and end up missing a column, getting the column order wrong or mistyping a column name.
 
 Notable features:
 
@@ -82,6 +82,8 @@ $ go install -tags=fts5 github.com/bokwoon95/sqddl@latest
 ## SELECT example (Raw SQL)
 
 ```go
+db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
+
 actors, err := sq.FetchAll(db, sq.
     Queryf("SELECT {*} FROM actor AS a WHERE a.actor_id IN ({})",
         []int{1, 2, 3, 4, 5},
@@ -103,6 +105,8 @@ actors, err := sq.FetchAll(db, sq.
 To use the query builder, you must first [define your table structs](https://bokwoon.neocities.org/sq.html#table-structs).
 
 ```go
+db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
+
 a := sq.New[ACTOR]("a")
 actors, err := sq.FetchAll(db, sq.
     From(a).
@@ -122,6 +126,8 @@ actors, err := sq.FetchAll(db, sq.
 ## INSERT example (Raw SQL)
 
 ```go
+db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
+
 _, err := sq.Exec(db, sq.
     Queryf("INSERT INTO actor (actor_id, first_name, last_name) VALUES {}", sq.RowValues{
         {18, "DAN", "TORN"},
@@ -137,6 +143,8 @@ _, err := sq.Exec(db, sq.
 To use the query builder, you must first [define your table structs](https://bokwoon.neocities.org/sq.html#table-structs).
 
 ```go
+db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
+
 a := sq.New[ACTOR]("a")
 _, err := sq.Exec(db, sq.
     InsertInto(a).
