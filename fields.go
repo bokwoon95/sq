@@ -231,7 +231,7 @@ func (f ArrayField) Setf(format string, values ...any) Assignment {
 	return Set(f, Expr(format, values...))
 }
 
-// SetArray is like Set but it wraps val with the ArrayValue() constructor.
+// SetArray is like Set but it wraps val with ArrayValue().
 func (f ArrayField) SetArray(val any) Assignment { return Set(f, ArrayValue(val)) }
 
 // GetAlias returns the alias of the ArrayField.
@@ -538,17 +538,26 @@ func (f EnumField) IsNull() Predicate { return Expr("{} IS NULL", f) }
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
 func (f EnumField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
 
-// Eq returns a 'field = val' Predicate.
+// Eq returns a 'field = val' Predicate. The value is passed as-is to the
+// database. If the value is an Enumeration type, you should be using EqEnum
+// instead.
 func (f EnumField) Eq(val any) Predicate { return Eq(f, val) }
 
-// Ne returns a 'field <> val' Predicate.
+// Ne returns a 'field <> val' Predicate. The value is passed as-is to the
+// database. If the value is an Enumeration type, you should be using NeEnum
+// instead.
 func (f EnumField) Ne(val any) Predicate { return Ne(f, val) }
+
+// EqEnum is like Eq but it wraps val with EnumValue().
+func (f EnumField) EqEnum(val Enumeration) Predicate { return Eq(f, EnumValue(val)) }
+
+// NeEnum  is like Ne but it wraps val with EnumValue().
+func (f EnumField) NeEnum(val Enumeration) Predicate { return Ne(f, EnumValue(val)) }
 
 // Set returns an Assignment assigning the val to the field.
 func (f EnumField) Set(val any) Assignment { return Set(f, val) }
 
-// SetEnum returns an Assignment assigning an Enumeration to the field. The
-// Enumeration value is wrapped with the EnumValue constructor.
+// SetEnum is like Set but wraps val with EnumValue().
 func (f EnumField) SetEnum(val Enumeration) Assignment { return Set(f, EnumValue(val)) }
 
 // Setf returns an Assignment assigning an expression to the field.
@@ -704,7 +713,7 @@ func (f JSONField) Setf(format string, values ...any) Assignment {
 	return Setf(f, format, values...)
 }
 
-// SetJSON is like Set but it wraps val with the JSONValue constructor.
+// SetJSON is like Set but it wraps val with JSONValue().
 func (f JSONField) SetJSON(val any) Assignment { return Set(f, JSONValue(val)) }
 
 // GetAlias returns the alias of the JSONField.
@@ -1392,11 +1401,19 @@ func (f UUIDField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
 // In returns a 'field IN (val)' Predicate.
 func (f UUIDField) In(val any) Predicate { return In(f, val) }
 
-// Eq returns a 'field = val' Predicate.
+// Eq returns a 'field = val' Predicate. The value is passed as-is to the
+// database.
 func (f UUIDField) Eq(val any) Predicate { return Eq(f, val) }
 
-// Ne returns a 'field <> val' Predicate.
+// Ne returns a 'field <> val' Predicate. The value is passed as-is to the
+// database.
 func (f UUIDField) Ne(val any) Predicate { return Ne(f, val) }
+
+// EqUUID is like Eq but it wraps val in UUIDValue().
+func (f UUIDField) EqUUID(val any) Predicate { return Eq(f, UUIDValue(val)) }
+
+// NeUUID is like Ne but it wraps val in UUIDValue().
+func (f UUIDField) NeUUID(val any) Predicate { return Ne(f, UUIDValue(val)) }
 
 // Set returns an Assignment assigning the val to the field.
 func (f UUIDField) Set(val any) Assignment { return Set(f, val) }
