@@ -671,7 +671,9 @@ type JSONField struct {
 
 var _ interface {
 	Field
+	Binary
 	JSON
+	String
 	WithPrefix(string) Field
 } = (*JSONField)(nil)
 
@@ -722,8 +724,14 @@ func (f JSONField) GetAlias() string { return f.alias }
 // IsField implements the Field interface.
 func (f JSONField) IsField() {}
 
+// IsBinary implements the Binary interface.
+func (f JSONField) IsBinary() {}
+
 // IsJSON implements the JSON interface.
 func (f JSONField) IsJSON() {}
+
+// IsString implements the String interface.
+func (f JSONField) IsString() {}
 
 type jsonValue struct{ value any }
 
