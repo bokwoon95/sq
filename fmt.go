@@ -992,19 +992,27 @@ var sqliteKeywords = map[string]struct{}{
 }
 
 // Postgres keyword reference:
-// SELECT * FROM pg_get_keywords() WHERE catcode = 'R' AND barelabel;
+// https://www.postgresql.org/docs/current/sql-keywords-appendix.html
 var postgresKeywords = map[string]struct{}{
-	"all": {}, "analyse": {}, "analyze": {}, "and": {}, "any": {}, "asc": {},
-	"asymmetric": {}, "both": {}, "case": {}, "cast": {}, "check": {}, "collate": {},
-	"column": {}, "constraint": {}, "current_catalog": {}, "current_date": {},
-	"current_role": {}, "current_time": {}, "current_timestamp": {},
+	"all": {}, "analyse": {}, "analyze": {}, "and": {}, "any": {}, "array": {}, "as": {},
+	"asc": {}, "asymmetric": {}, "authorization": {}, "binary": {}, "both": {},
+	"case": {}, "cast": {}, "check": {}, "collate": {}, "collation": {}, "column": {},
+	"concurrently": {}, "constraint": {}, "create": {}, "cross": {},
+	"current_catalog": {}, "current_date": {}, "current_role": {},
+	"current_schema": {}, "current_time": {}, "current_timestamp": {},
 	"current_user": {}, "default": {}, "deferrable": {}, "desc": {}, "distinct": {},
-	"do": {}, "else": {}, "end": {}, "false": {}, "foreign": {}, "in": {},
-	"initially": {}, "lateral": {}, "leading": {}, "localtime": {},
-	"localtimestamp": {}, "not": {}, "null": {}, "only": {}, "or": {}, "placing": {},
-	"primary": {}, "references": {}, "select": {}, "session_user": {}, "some": {},
-	"symmetric": {}, "table": {}, "then": {}, "trailing": {}, "true": {}, "unique": {},
-	"user": {}, "using": {}, "variadic": {}, "when": {},
+	"do": {}, "else": {}, "end": {}, "except": {}, "false": {}, "fetch": {}, "for": {},
+	"foreign": {}, "freeze": {}, "from": {}, "full": {}, "grant": {}, "group": {},
+	"having": {}, "ilike": {}, "in": {}, "initially": {}, "inner": {}, "intersect": {},
+	"into": {}, "is": {}, "isnull": {}, "join": {}, "lateral": {}, "leading": {},
+	"left": {}, "like": {}, "limit": {}, "localtime": {}, "localtimestamp": {},
+	"natural": {}, "not": {}, "notnull": {}, "null": {}, "offset": {}, "on": {},
+	"only": {}, "or": {}, "order": {}, "outer": {}, "overlaps": {}, "placing": {},
+	"primary": {}, "references": {}, "returning": {}, "right": {}, "select": {},
+	"session_user": {}, "similar": {}, "some": {}, "symmetric": {}, "table": {},
+	"tablesample": {}, "then": {}, "to": {}, "trailing": {}, "true": {}, "union": {},
+	"unique": {}, "user": {}, "using": {}, "variadic": {}, "verbose": {}, "when": {},
+	"where": {}, "window": {}, "with": {},
 }
 
 // MySQL keyword reference:
