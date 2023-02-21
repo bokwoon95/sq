@@ -206,6 +206,18 @@ func QuoteIdentifier(dialect string, identifier string) string {
 			needsQuoting = true
 			break
 		}
+		if !needsQuoting && dialect != "" {
+			switch dialect {
+			case DialectSQLite:
+				_, needsQuoting = sqliteKeywords[strings.ToLower(identifier)]
+			case DialectPostgres:
+				_, needsQuoting = postgresKeywords[strings.ToLower(identifier)]
+			case DialectMySQL:
+				_, needsQuoting = mysqlKeywords[strings.ToLower(identifier)]
+			case DialectSQLServer:
+				_, needsQuoting = sqlserverKeywords[strings.ToLower(identifier)]
+			}
+		}
 	}
 	if !needsQuoting {
 		return identifier
@@ -948,3 +960,85 @@ func (p TimeParameter) IsField() {}
 
 // IsTime implements the Time interface.
 func (p TimeParameter) IsTime() {}
+
+// SQLite keyword reference: https://www.sqlite.org/lang_keywords.html
+var sqliteKeywords = map[string]struct{}{
+	"abort": {}, "action": {}, "add": {}, "after": {}, "all": {}, "alter": {},
+	"always": {}, "analyze": {}, "and": {}, "as": {}, "asc": {}, "attach": {},
+	"autoincrement": {}, "before": {}, "begin": {}, "between": {}, "by": {},
+	"cascade": {}, "case": {}, "cast": {}, "check": {}, "collate": {}, "column": {},
+	"commit": {}, "conflict": {}, "constraint": {}, "create": {}, "cross": {},
+	"current": {}, "current_date": {}, "current_time": {}, "current_timestamp": {},
+	"database": {}, "default": {}, "deferrable": {}, "deferred": {}, "delete": {},
+	"desc": {}, "detach": {}, "distinct": {}, "do": {}, "drop": {}, "each": {},
+	"else": {}, "end": {}, "escape": {}, "except": {}, "exclude": {}, "exclusive": {},
+	"exists": {}, "explain": {}, "fail": {}, "filter": {}, "first": {}, "following": {},
+	"for": {}, "foreign": {}, "from": {}, "full": {}, "generated": {}, "glob": {},
+	"group": {}, "groups": {}, "having": {}, "if": {}, "ignore": {}, "immediate": {},
+	"in": {}, "index": {}, "indexed": {}, "initially": {}, "inner": {}, "insert": {},
+	"instead": {}, "intersect": {}, "into": {}, "is": {}, "isnull": {}, "join": {},
+	"key": {}, "last": {}, "left": {}, "like": {}, "limit": {}, "match": {},
+	"materialized": {}, "natural": {}, "no": {}, "not": {}, "nothing": {}, "notnull": {},
+	"null": {}, "nulls": {}, "of": {}, "offset": {}, "on": {}, "or": {}, "order": {},
+	"others": {}, "outer": {}, "over": {}, "partition": {}, "plan": {}, "pragma": {},
+	"preceding": {}, "primary": {}, "query": {}, "raise": {}, "range": {},
+	"recursive": {}, "references": {}, "regexp": {}, "reindex": {}, "release": {},
+	"rename": {}, "replace": {}, "restrict": {}, "returning": {}, "right": {},
+	"rollback": {}, "row": {}, "rows": {}, "savepoint": {}, "select": {}, "set": {},
+	"table": {}, "temp": {}, "temporary": {}, "then": {}, "ties": {}, "to": {},
+	"transaction": {}, "trigger": {}, "unbounded": {}, "union": {}, "unique": {},
+	"update": {}, "using": {}, "vacuum": {}, "values": {}, "view": {}, "virtual": {},
+	"when": {}, "where": {}, "window": {}, "with": {}, "without": {},
+}
+
+// Postgres keyword reference: https://en.wikipedia.org/wiki/List_of_SQL_reserved_words
+var postgresKeywords = map[string]struct{}{
+	"all": {}, "alter": {}, "analyse": {}, "analyze": {}, "and": {}, "any": {},
+	"array": {}, "as": {}, "asc": {}, "asymmetric": {}, "authorization": {},
+	"binary": {}, "both": {}, "case": {}, "cast": {}, "check": {}, "collate": {},
+	"collation": {}, "column": {}, "concurrently": {}, "constraint": {}, "create": {},
+	"cross": {}, "current_catalog": {}, "current_date": {}, "current_role": {},
+	"current_schema": {}, "current_time": {}, "current_timestamp": {},
+	"current_user": {}, "default": {}, "deferrable": {}, "desc": {}, "distinct": {},
+	"do": {}, "else": {}, "end": {}, "except": {}, "false": {}, "fetch": {}, "for": {},
+	"foreign": {}, "freeze": {}, "from": {}, "full": {}, "grant": {}, "group": {},
+	"having": {}, "ilike": {}, "in": {}, "initially": {}, "inner": {}, "intersect": {},
+	"into": {}, "is": {}, "isnull": {}, "join": {}, "lateral": {}, "leading": {},
+	"left": {}, "like": {}, "limit": {}, "localtime": {}, "localtimestamp": {},
+	"natural": {}, "not": {}, "notnull": {}, "null": {}, "offset": {}, "on": {},
+	"only": {}, "or": {}, "order": {}, "outer": {}, "overlaps": {}, "placing": {},
+	"primary": {}, "references": {}, "returning": {}, "right": {}, "select": {},
+	"session_user": {}, "similar": {}, "some": {}, "symmetric": {}, "table": {},
+	"tablesample": {}, "then": {}, "to": {}, "trailing": {}, "true": {}, "union": {},
+	"unique": {}, "user": {}, "using": {}, "variadic": {}, "verbose": {}, "when": {},
+	"where": {}, "window": {}, "with": {},
+}
+
+// MySQL keyword reference: https://en.wikipedia.org/wiki/List_of_SQL_reserved_words
+var mysqlKeywords = map[string]struct{}{
+	"all": {}, "alter": {}, "analyze": {}, "and": {}, "as": {}, "asc": {}, "binary": {},
+	"both": {}, "case": {}, "check": {}, "collate": {}, "column": {}, "constraint": {},
+	"create": {}, "cross": {}, "current_date": {}, "current_time": {},
+	"current_timestamp": {}, "current_user": {}, "default": {}, "desc": {},
+	"distinct": {}, "else": {}, "except": {}, "false": {}, "fetch": {}, "for": {},
+	"foreign": {}, "from": {}, "grant": {}, "group": {}, "having": {}, "in": {},
+	"inner": {}, "into": {}, "is": {}, "join": {}, "lateral": {}, "leading": {},
+	"left": {}, "like": {}, "limit": {}, "localtime": {}, "localtimestamp": {},
+	"natural": {}, "not": {}, "null": {}, "on": {}, "or": {}, "order": {}, "outer": {},
+	"primary": {}, "references": {}, "right": {}, "select": {}, "table": {}, "then": {},
+	"to": {}, "trailing": {}, "true": {}, "union": {}, "unique": {}, "using": {},
+	"when": {}, "where": {}, "window": {}, "with": {},
+}
+
+// SQLServer keyword reference: https://en.wikipedia.org/wiki/List_of_SQL_reserved_words
+var sqlserverKeywords = map[string]struct{}{
+	"all": {}, "alter": {}, "and": {}, "as": {}, "asc": {}, "case": {}, "check": {},
+	"collate": {}, "column": {}, "constraint": {}, "create": {}, "cross": {},
+	"current_date": {}, "current_time": {}, "current_timestamp": {},
+	"current_user": {}, "default": {}, "desc": {}, "distinct": {}, "else": {},
+	"except": {}, "fetch": {}, "for": {}, "foreign": {}, "from": {}, "grant": {},
+	"group": {}, "having": {}, "in": {}, "inner": {}, "into": {}, "is": {}, "join": {},
+	"left": {}, "like": {}, "not": {}, "null": {}, "on": {}, "or": {}, "order": {},
+	"outer": {}, "primary": {}, "references": {}, "right": {}, "select": {}, "table": {},
+	"then": {}, "to": {}, "union": {}, "unique": {}, "when": {}, "where": {}, "with": {},
+}
