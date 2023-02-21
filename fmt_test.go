@@ -583,10 +583,10 @@ func TestWritef(t *testing.T) {
 		tt.format = "SELECT {field} FROM {tbl} WHERE {field} IN ({nums})"
 		tt.values = []any{
 			sql.Named("nums", []int{1, 2, 3}),
-			sql.Named("tbl", tmptable("public.tbl")),
+			sql.Named("tbl", tmptable("dbo.tbl")),
 			sql.Named("field", tmpfield("tbl.field")),
 		}
-		tt.wantQuery = `SELECT tbl.field FROM public.tbl WHERE tbl.field IN (@p1, @p2, @p3)`
+		tt.wantQuery = `SELECT tbl.field FROM dbo.tbl WHERE tbl.field IN (@p1, @p2, @p3)`
 		tt.wantArgs = []any{1, 2, 3}
 		assert(t, tt)
 	})
