@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -138,6 +137,14 @@ func (b mysqlQueryBuilder) Queryf(format string, values ...any) CustomQuery {
 // Queryf creates a new SQL Server query using Writef syntax.
 func (b sqlserverQueryBuilder) Queryf(format string, values ...any) CustomQuery {
 	return CustomQuery{dialect: DialectSQLServer, format: format, values: values}
+}
+
+// Append returns a new CustomQuery with the format string and values slice
+// appended to the current CustomQuery.
+func (q CustomQuery) Append(format string, values ...any) CustomQuery {
+	q.format += " " + format
+	q.values = append(q.values, values...)
+	return q
 }
 
 // WriteSQL implements the SQLWriter interface.
@@ -598,41 +605,24 @@ func appendPredicates(predicate Predicate, predicates []Predicate) VariadicPredi
 	return p2
 }
 
-type sqtype string
-
-// DefaultValue is a special value indicating that the user wishes to use the
-// default params in the CompiledFetch, PreparedFetch, CompiledExec or
-// PreparedExec.
-const DefaultValue sqtype = "DEFAULT"
-
 // substituteParams will return an args slice by substituting values from the
 // given Params into the SQLOutput. The underlying SQLOutput is untouched.
-func substituteParams(dialect string, args []any, params map[string][]int, paramValues map[string]any) ([]any, error) {
-	names := make([]string, 0, len(params))
-	for name := range params {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if _, ok := paramValues[name]; !ok {
-			return nil, fmt.Errorf("param '%s' not provided (required: %s)", name, strings.Join(names, ", "))
-		}
+func substituteParams(dialect string, args []any, paramIndexes map[string][]int, paramValues map[string]any) ([]any, error) {
+	if len(paramValues) == 0 {
+		return args, nil
 	}
 	newArgs := make([]any, len(args))
 	copy(newArgs, args)
 	var err error
-	for key, value := range paramValues {
-		if value == DefaultValue {
-			continue
-		}
+	for name, value := range paramValues {
 		if dialectValuer, ok := value.(DialectValuer); ok {
 			value, err = dialectValuer.DialectValuer(dialect)
 			if err != nil {
 				return nil, err
 			}
 		}
-		indices := params[key]
-		for _, index := range indices {
+		indexes := paramIndexes[name]
+		for _, index := range indexes {
 			switch arg := newArgs[index].(type) {
 			case sql.NamedArg:
 				newArgs[index] = sql.NamedArg{Name: arg.Name, Value: value}

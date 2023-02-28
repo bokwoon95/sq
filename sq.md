@@ -361,6 +361,8 @@ sq.SQLServer.Queryf(query) // sq.Queryf(query).SetDialect(sq.DialectSQLServer)
 
 sq.Queryf (and sq.Expr) use a Printf-style templating syntax where the format string uses curly brace `{}` placeholders. Here is a basic example for Queryf:
 
+> **Note**: All examples below interpolate their arguments into the SQL query for illustrative purposes, but in actuality the [proper prepared statement placeholders](#set-query-dialect) will be generated.
+
 ```go
 sq.Queryf("SELECT first_name FROM actor WHERE actor_id = {}", 18)
 ```
@@ -369,14 +371,39 @@ sq.Queryf("SELECT first_name FROM actor WHERE actor_id = {}", 18)
 SELECT first_name FROM actor WHERE actor_id = 18
 ```
 
+sq.Queryf has an Append() method which allows for a basic level of query building:
+
+```go
+var (
+    name  = "bob"
+    email = "bob@email.com"
+    age   = 27
+)
+q := Queryf("SELECT name, email FROM tbl WHERE 1 = 1") // https://stackoverflow.com/questions/1264681/what-is-the-purpose-of-using-where-1-1-in-sql-statements
+if name != "" {
+    q = q.Append("AND name = {}", name)
+}
+if email != "" {
+    q = q.Append("AND email = {}", email)
+}
+if age != 0 {
+    q = q.Append("AND age = {}", age)
+}
+```
+
+```sql
+SELECT name, email FROM tbl WHERE 1 = 1 AND name = 'bob' AND email = 'bob@email.com' AND age = 27
+```
+
 Unlike with SQL prepared statements, the curly brace `{}` placeholders are allowed to change the structure of a query (i.e. it can appear anywhere inside a query):
 
 ```go
 sq.Queryf(
-    // format
     "SELECT {} FROM {} WHERE first_name = {}",
-    // values
-    sq.Fields{sq.Expr("actor_id"), sq.Expr("last_name")},
+    sq.Fields{
+        sq.Expr("actor_id"),
+        sq.Expr("last_name"),
+    },
     sq.Expr("actor"),
     "DAN",
 )
@@ -2682,9 +2709,83 @@ if err != nil {
 
 The cost of query building can be amortized by compiling queries down into a query string and args slice. Compiled queries are reused by supplying a different set of parameters each time you execute them. They can be executed safely in parallel.
 
-### Providing rebindable params #rebindable-params
+```go
+// Compile the query.
+compiledQuery, err := sq.CompileFetch(sq.
+    Queryf("SELECT {*} FROM actor WHERE first_name = {first_name}, last_name = {last_name}",
+        sql.Named("first_name", nil), // first_name is a rebindable param, with default value nil
+        sql.Named("last_name", nil),  // last_name is a rebindable param, with default value nil
+    ).
+    SetDialect(sq.DialectPostgres),
+    func(row *sq.Row) Actor {
+        return Actor{
+            ActorID:   row.Int("actor_id"),
+            FirstName: row.String("first_name"),
+            LastName:  row.String("last_name"),
+        }
+    },
+)
+if err != nil {
+}
 
-Any [named parameter](#ordinal-named-placeholders) e.g. `sql.Named()` passed to the query builder can be rebinded later by the compiled query. There are 9 variants of named parameters available.
+// Obtain the query string and args slice back from the CompiledFetch.
+// The params map and rowmapper function are also available.
+query, args, params, rowmapper := compiledQuery.GetSQL()
+
+// Execute the compiled query with the default values.
+actor, err := compiledQuery.FetchOne(db, nil)
+if err != nil {
+}
+
+// Execute the compiled query with values first_name = "DAN", last_name = "TORN".
+actor, err := compiledQuery.FetchOne(db, sq.Params{
+    "first_name": "DAN",
+    "last_name":  "TORN",
+})
+if err != nil {
+}
+```
+
+### Rebindable params #rebindable-params
+
+Only [named parameters](#ordinal-named-placeholders) can be rebinded in a compiled query, which means they must be provided during the query building phase.
+
+```go
+// WRONG: actor_id cannot be rebinded.
+compiledQuery, err := sq.CompileFetch(
+    sq.Queryf("SELECT {*} FROM actor WHERE actor_id = {}", 1),
+    func(row *sq.Row) Actor {
+        return Actor{
+            FirstName: row.String("first_name"),
+            LastName:  row.String("last_name"),
+        }
+    },
+)
+if err != nil {
+}
+// ERROR: named parameter {actorID} not provided
+actor, err := compiledQuery.FetchOne(db, sq.Params{"actorID": 2})
+if err != nil {
+}
+
+// CORRECT: actor_id can be rebinded (using "actorID").
+compiledQuery, err := sq.CompileFetch(
+    sq.Queryf("SELECT {*} FROM actor WHERE actor_id = {actorID}", sql.Named("actorID", 1)),
+    func(row *sq.Row) Actor {
+        return Actor{
+            FirstName: row.String("first_name"),
+            LastName:  row.String("last_name"),
+        }
+    },
+)
+if err != nil {
+}
+actor, err := compiledQuery.FetchOne(db, sq.Params{"actorID": 2})
+if err != nil {
+}
+```
+
+Most of the time you should use [sql.Named()](https://pkg.go.dev/database/sql#Named), but if you need to conform to various interfaces like [String](https://pkg.go.dev/github.com/bokwoon95/sq#String) or [Number](https://pkg.go.dev/github.com/bokwoon95/sq#Number) you can use the typed versions [sq.StringParam()](https://pkg.go.dev/github.com/bokwoon95/sq#StringParam) or [sq.IntParam()](https://pkg.go.dev/github.com/bokwoon95/sq#IntParam).
 
 <div class="table-wrapper">
 <table>
@@ -2735,144 +2836,103 @@ Any [named parameter](#ordinal-named-placeholders) e.g. `sql.Named()` passed to 
 </table>
 </div>
 
-### Rebinding params #rebinding-params
-
-To execute a compiled query, you need to rebind its params by providing it an `sq.Params{}`.
-
+### CompiledFetch example #compiled-fetch
 ```go
-// Compile the query.
+type ACTOR struct {
+    sq.TableStruct
+    ACTOR_ID    sq.NumberField
+    FIRST_NAME  sq.StringField
+    LAST_NAME   sq.StringField
+    LAST_UPDATE sq.TimeField
+}
+
+a := sq.New[ACTOR]("")
 q, err := sq.CompileFetch(sq.
-    Queryf("SELECT {*} FROM actor WHERE first_name = {first_name}, last_name = {last_name}",
-        sql.Named("first_name", nil), // first_name is a rebindable param, with default value nil
-        sql.Named("last_name", nil),  // last_name is a rebindable param, with default value nil
-    ).
+    From(a).
+    Where(a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0))). // actor_id is a rebindable param, with default value 0
     SetDialect(sq.DialectPostgres),
     func(row *sq.Row) Actor {
         return Actor{
-            ActorID:   row.IntField("actor_id"),
-            FirstName: row.StringFIeld("first_name"),
-            LastName:  row.StringFIeld("last_name"),
+            ActorID:   row.IntField(a.ACTOR_ID),
+            FirstName: row.StringField(a.FIRST_NAME),
+            LastName:  row.StringField(a.LAST_NAME),
         }
     },
 )
 if err != nil {
 }
 
-// Execute the compiled query.
-actor, err := q.FetchOne(db, sq.Params{
-    "first_name": "DAN",
-    "last_name":  "TORN",
-})
-```
+actor, err := getActor.FetchOne(db, sq.Params{"actor_id": 1})
+fmt.Println(actor) // {ActorID: 1, FirstName: "PENELOPE", LastName: "GUINESS"}
 
-You must rebind every parameter in the query or else an error will be returned. If you wish to use a parameter's default value that was supplied during the building of the query, pass in the sentinel constant **sq.DefaultValue** as the value.
+actor, err = getActor.FetchOne(db, sq.Params{"actor_id": 2})
+fmt.Println(actor) // {ActorID: 2, FirstName: "NICK", LastName: "WAHLBERG"}
 
-```go
-// Execute the compiled query using the default values.
-actor, err := q.FetchOne(db, sq.Params{
-    "first_name": sq.DefaultValue,
-    "last_name":  sq.DefaultValue,
-})
-```
-
-### CompiledFetch example #compiled-fetch
-```go
-// getActor is compiled once on startup and is safe to use over and over again.
-var getActor = func() *sq.CompiledFetch[ACTOR] {
-    q, err := sq.CompileFetch(sq.
-        From(a).
-        Where(
-            // actor_id is a rebindable param, with default value 0
-            a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0)),
-        ).
-        SetDialect(sq.DialectPostgres),
-        func(row *sq.Row) Actor {
-            return Actor{
-                ActorID:   row.IntField(a.ACTOR_ID),
-                FirstName: row.StringField(a.FIRST_NAME),
-                LastName:  row.StringField(a.LAST_NAME),
-            }
-        },
-    )
-    if err != nil {
-        panic(err)
-    }
-    return q
-}()
-
-func main() {
-    db := openDB()
-
-    actor, err := getActor.FetchOne(db, sq.Params{
-        "actor_id": 1,
-    })
-    fmt.Println(actor) // {ActorID: 1, FirstName: "PENELOPE", LastName: "GUINESS"}
-
-    actor, err = getActor.FetchOne(db, sq.Params{
-        "actor_id": 2,
-    })
-    fmt.Println(actor) // {ActorID: 2, FirstName: "NICK", LastName: "WAHLBERG"}
-
-    actor, err = getActor.FetchOne(db, sq.Params{
-        "actor_id": 3,
-    })
-    fmt.Println(actor) // {ActorID: 3, FirstName: "ED", LastName: "CHASE"}
-}
+actor, err = getActor.FetchOne(db, sq.Params{"actor_id": 3})
+fmt.Println(actor) // {ActorID: 3, FirstName: "ED", LastName: "CHASE"}
 ```
 
 ### CompiledExec example #compiled-exec
 ```go
-// insertActor is compiled once on startup and is safe to use over and over again.
-var insertActor = func() *CompiledExec {
-    a := sq.New[ACTOR]("")
-    q, err = sq.CompileExec(sq.
-        InsertInto(a).
-        ColumnValues(func(col *sq.Column) error {
-            col.Set(a.ACTOR_ID, sql.Named("actor_id", nil))     // actor_id is a rebindable param, with default value nil
-            col.Set(a.FIRST_NAME, sql.Named("first_name", nil)) // first_name is a rebindable param, with default value nil
-            col.Set(a.LAST_NAME, sql.Named("last_name", nil))   // last_name is a rebindable param, with default value nil
-            return nil
-        }).
-        SetDialect(sq.DialectPostgres),
-    )
-    if err != nil {
-        panic(err)
-    }
-    return q
-}()
-
-func main() {
-    db := openDB()
-
-    _, err := insertActor.Exec(db, sq.Params{
-        "actor_id":   1,
-        "first_name": "PENELOPE",
-        "last_name":  "GUINESS",
-    })
-    // INSERT INTO actor (actor_id, first_name, last_name) VALUES (1, 'PENELOPE', 'GUINESS')
-
-    _, err = insertActor.Exec(db, sq.Params{
-        "actor_id":   2,
-        "first_name": "NICK",
-        "last_name":  "WAHLBERG",
-    })
-    // INSERT INTO actor (actor_id, first_name, last_name) VALUES (2, 'NICK', 'WAHLBERG')
-
-    _, err = insertActor.Exec(db, sq.Params{
-        "actor_id":   3,
-        "first_name": "ED",
-        "last_name":  "CHASE",
-    })
-    // INSERT INTO actor (actor_id, first_name, last_name) VALUES (3, 'ED', 'CHASE')
+type ACTOR struct {
+    sq.TableStruct
+    ACTOR_ID    sq.NumberField
+    FIRST_NAME  sq.StringField
+    LAST_NAME   sq.StringField
+    LAST_UPDATE sq.TimeField
 }
+
+a := sq.New[ACTOR]("")
+q, err = sq.CompileExec(sq.
+    InsertInto(a).
+    ColumnValues(func(col *sq.Column) error {
+        col.Set(a.ACTOR_ID, sql.Named("actor_id", nil))     // actor_id is a rebindable param, with default value nil
+        col.Set(a.FIRST_NAME, sql.Named("first_name", nil)) // first_name is a rebindable param, with default value nil
+        col.Set(a.LAST_NAME, sql.Named("last_name", nil))   // last_name is a rebindable param, with default value nil
+        return nil
+    }).
+    SetDialect(sq.DialectPostgres),
+)
+if err != nil {
+}
+
+_, err := insertActor.Exec(db, sq.Params{
+    "actor_id":   1,
+    "first_name": "PENELOPE",
+    "last_name":  "GUINESS",
+})
+// INSERT INTO actor (actor_id, first_name, last_name) VALUES (1, 'PENELOPE', 'GUINESS')
+
+_, err = insertActor.Exec(db, sq.Params{
+    "actor_id":   2,
+    "first_name": "NICK",
+    "last_name":  "WAHLBERG",
+})
+// INSERT INTO actor (actor_id, first_name, last_name) VALUES (2, 'NICK', 'WAHLBERG')
+
+_, err = insertActor.Exec(db, sq.Params{
+    "actor_id":   3,
+    "first_name": "ED",
+    "last_name":  "CHASE",
+})
+// INSERT INTO actor (actor_id, first_name, last_name) VALUES (3, 'ED', 'CHASE')
 ```
 
 ### Preparing queries #preparing-queries
 
-Compiled queries can be further prepared by binding it to a database connection (creating a prepared statement).
+[Compiled queries](#compiling-queries) can be further prepared by binding it to a database connection (creating a prepared statement).
 
 ```go
-// Compile a query.
+type ACTOR struct {
+    sq.TableStruct
+    ACTOR_ID    sq.NumberField
+    FIRST_NAME  sq.StringField
+    LAST_NAME   sq.StringField
+    LAST_UPDATE sq.TimeField
+}
+
+// Compile the query.
+a := sq.New[ACTOR]("")
 compiledQuery, err := sq.CompileFetch(sq.
     From(a).
     Where(a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0))).
@@ -2888,15 +2948,61 @@ compiledQuery, err := sq.CompileFetch(sq.
 if err != nil {
 }
 
-// Prepare a compiled query.
+// Prepare the compiled query.
 preparedQuery, err := compiledQuery.Prepare(db)
 if err != nil {
 }
 
-// Use the prepared query.
-err = preparedQuery.FetchOne(sq.Params{
-    "actor_id": 1,
+// Use the prepared query with default values.
+actor, err := preparedQuery.FetchOne(nil)
+if err != nil {
+}
+
+// Use the prepared query with values actor_id = 1.
+actor, err = preparedQuery.FetchOne(sq.Params{"actor_id": 1})
+if err != nil {
+}
+```
+
+Alternatively, you may directly prepare PreparedQuery directly with PrepareFetch.
+
+```go
+// Prepare the query.
+preparedQuery, err := sq.PrepareFetch(db, sq.
+    Queryf("SELECT {*} FROM actor WHERE first_name = {first_name}, last_name = {last_name}",
+        sql.Named("first_name", nil), // first_name is a rebindable param, with default value nil
+        sql.Named("last_name", nil),  // last_name is a rebindable param, with default value nil
+    ).
+    SetDialect(sq.DialectPostgres),
+    func(row *sq.Row) Actor {
+        return Actor{
+            ActorID:   row.Int("actor_id"),
+            FirstName: row.String("first_name"),
+            LastName:  row.String("last_name"),
+        }
+    },
+)
+if err != nil {
+}
+
+// Obtain a CompiledFetch from the PreparedFetch. This is useful if you need to
+// re-prepare the query on another DB connection.
+compiledQuery := preparedQuery.GetCompiled()
+// Example:
+preparedQuery, err = compiledQuery.Prepare(db2)
+
+// Execute the prepared query with the default values.
+actor, err := preparedQuery.FetchOne(nil)
+if err != nil {
+}
+
+// Execute the prepared query with values first_name = "DAN", last_name = "TORN".
+actor, err := preparedQuery.FetchOne(sq.Params{
+    "first_name": "DAN",
+    "last_name":  "TORN",
 })
+if err != nil {
+}
 ```
 
 ## Application-side Row Level Security #appliction-side-row-level-security

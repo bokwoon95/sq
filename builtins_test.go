@@ -204,55 +204,85 @@ func TestVariadicPredicate(t *testing.T) {
 }
 
 func TestQueryf(t *testing.T) {
-	TestTable{
-		item: Queryf("SELECT {field} FROM {table} WHERE {predicate}",
+	t.Run("basic", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		tt.item = Queryf("SELECT {field} FROM {table} WHERE {predicate}",
 			sql.Named("field", Expr("name")),
 			sql.Named("table", Expr("users")),
 			sql.Named("predicate", Expr("user_id = {}", 5)),
-		),
-		wantQuery: "SELECT name FROM users WHERE user_id = ?",
-		wantArgs:  []any{5},
-	}.assert(t)
+		)
+		tt.wantQuery = "SELECT name FROM users WHERE user_id = ?"
+		tt.wantArgs = []any{5}
+		tt.assert(t)
+	})
 
-	q := Queryf("SELECT {*} FROM {table} WHERE {predicate}",
-		sql.Named("table", Expr("users")),
-		sql.Named("predicate", Expr("user_id = {}", 5)),
-	)
-	if diff := testutil.Diff(q.GetDialect(), ""); diff != "" {
-		t.Error(testutil.Callers(), diff)
-	}
-	q2, ok := q.SetFetchableFields([]Field{Expr("name"), Expr("age")})
-	if !ok {
-		t.Fatal(testutil.Callers(), "not ok")
-	}
-	TestTable{
-		item:      q2,
-		wantQuery: "SELECT name, age FROM users WHERE user_id = ?",
-		wantArgs:  []any{5},
-	}.assert(t)
+	t.Run("select star", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		q := Queryf("SELECT {*} FROM {table} WHERE {predicate}",
+			sql.Named("table", Expr("users")),
+			sql.Named("predicate", Expr("user_id = {}", 5)),
+		)
+		if diff := testutil.Diff(q.GetDialect(), ""); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		q2, ok := q.SetFetchableFields([]Field{Expr("name"), Expr("age")})
+		if !ok {
+			t.Fatal(testutil.Callers(), "not ok")
+		}
+		tt.item = q2
+		tt.wantQuery = "SELECT name, age FROM users WHERE user_id = ?"
+		tt.wantArgs = []any{5}
+		tt.assert(t)
+	})
 
-	q = Queryf(`WITH cte AS (SELECT '{{*}' AS name) SELECT {*} FROM cte`)
-	q2, ok = q.SetFetchableFields([]Field{Expr("name")})
-	if !ok {
-		t.Fatal(testutil.Callers(), "not ok")
-	}
-	TestTable{
-		item:      q2,
-		wantQuery: "WITH cte AS (SELECT '{*}' AS name) SELECT name FROM cte",
-	}.assert(t)
+	t.Run("escape curly brace", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		q := Queryf(`WITH cte AS (SELECT '{{*}' AS name) SELECT {*} FROM cte`)
+		q2, ok := q.SetFetchableFields([]Field{Expr("name")})
+		if !ok {
+			t.Fatal(testutil.Callers(), "not ok")
+		}
+		tt.item = q2
+		tt.wantQuery = "WITH cte AS (SELECT '{*}' AS name) SELECT name FROM cte"
+		tt.assert(t)
+	})
 
-	q = Queryf(`{1} {3} {name} {} SELECT {*} FROM {1} {} {name} {}`, 5, sql.Named("name", "bob"), 10)
-	q2, ok = q.SetFetchableFields([]Field{Expr("alpha"), Expr("SUBSTR({}, {})", "apple", 77), Expr("beta")})
-	if !ok {
-		t.Fatal(testutil.Callers(), "not ok")
-	}
-	TestTable{
-		dialect:    DialectPostgres,
-		item:       q2,
-		wantQuery:  "$1 $2 $3 $4 SELECT alpha, SUBSTR($5, $6), beta FROM $1 $3 $3 $7",
-		wantArgs:   []any{5, 10, "bob", 5, "apple", 77, 10},
-		wantParams: map[string][]int{"name": {2}},
-	}.assert(t)
+	t.Run("mixed", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		q := Queryf(`{1} {3} {name} {} SELECT {*} FROM {1} {} {name} {}`, 5, sql.Named("name", "bob"), 10)
+		q2, ok := q.SetFetchableFields([]Field{Expr("alpha"), Expr("SUBSTR({}, {})", "apple", 77), Expr("beta")})
+		if !ok {
+			t.Fatal(testutil.Callers(), "not ok")
+		}
+		tt.dialect = DialectPostgres
+		tt.item = q2
+		tt.wantQuery = "$1 $2 $3 $4 SELECT alpha, SUBSTR($5, $6), beta FROM $1 $3 $3 $7"
+		tt.wantArgs = []any{5, 10, "bob", 5, "apple", 77, 10}
+		tt.wantParams = map[string][]int{"name": {2}}
+		tt.assert(t)
+	})
+
+	t.Run("append", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		q := Queryf("SELECT {*} FROM tbl WHERE 1 = 1")
+		q = q.Append("AND name = {}", "bob")
+		q = q.Append("AND email = {email}", sql.Named("email", "bob@email.com"))
+		q = q.Append("AND age = {age}", sql.Named("age", 27))
+		q2, ok := q.SetFetchableFields([]Field{Expr("name"), Expr("email")})
+		if !ok {
+			t.Fatal(testutil.Callers(), "not ok")
+		}
+		tt.item = q2
+		tt.wantQuery = "SELECT name, email FROM tbl WHERE 1 = 1 AND name = ? AND email = ? AND age = ?"
+		tt.wantArgs = []any{"bob", "bob@email.com", 27}
+		tt.wantParams = map[string][]int{"email": {1}, "age": {2}}
+		tt.assert(t)
+	})
 }
 
 func TestAssign(t *testing.T) {
@@ -538,14 +568,32 @@ func Test_appendPredicates(t *testing.T) {
 }
 
 func Test_substituteParams(t *testing.T) {
+	t.Run("no params provided", func(t *testing.T) {
+		t.Parallel()
+		args := []any{1, 2, 3}
+		params := map[string][]int{"one": {0}, "two": {1}, "three": {2}}
+		gotArgs, err := substituteParams("", args, params, nil)
+		if err != nil {
+			t.Fatal(testutil.Callers(), err)
+		}
+		wantArgs := []any{1, 2, 3}
+		if diff := testutil.Diff(gotArgs, wantArgs); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+	})
+
 	t.Run("not all params provided", func(t *testing.T) {
 		t.Parallel()
 		args := []any{1, 2, 3}
 		params := map[string][]int{"one": {0}, "two": {1}, "three": {2}}
 		paramValues := Params{"one": "One", "two": "Two"}
-		_, err := substituteParams("", args, params, paramValues)
-		if err == nil {
-			t.Error(testutil.Callers(), "expected error but got nil")
+		gotArgs, err := substituteParams("", args, params, paramValues)
+		if err != nil {
+			t.Fatal(testutil.Callers(), err)
+		}
+		wantArgs := []any{"One", "Two", 3}
+		if diff := testutil.Diff(gotArgs, wantArgs); diff != "" {
+			t.Error(testutil.Callers(), diff)
 		}
 	})
 
@@ -568,7 +616,6 @@ func Test_substituteParams(t *testing.T) {
 			"three": {3},
 		}
 		paramValues := Params{
-			"zero":  DefaultValue,
 			"one":   "[one]",
 			"two":   "[two]",
 			"three": "[three]",
