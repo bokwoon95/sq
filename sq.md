@@ -379,7 +379,7 @@ var (
     email = "bob@email.com"
     age   = 27
 )
-q := Queryf("SELECT name, email FROM tbl WHERE 1 = 1") // https://stackoverflow.com/questions/1264681/what-is-the-purpose-of-using-where-1-1-in-sql-statements
+q := sq.Queryf("SELECT name, email FROM tbl WHERE 1 = 1") // https://stackoverflow.com/questions/1264681/what-is-the-purpose-of-using-where-1-1-in-sql-statements
 if name != "" {
     q = q.Append("AND name = {}", name)
 }
