@@ -105,6 +105,14 @@ actors, err := sq.FetchAll(db, sq.
 To use the query builder, you must first [define your table structs](https://bokwoon.neocities.org/sq.html#table-structs).
 
 ```go
+type ACTOR struct {
+    sq.TableStruct
+    ACTOR_ID    sq.NumberField
+    FIRST_NAME  sq.StringField
+    LAST_NAME   sq.StringField
+    LAST_UPDATE sq.TimeField
+}
+
 db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
 
 a := sq.New[ACTOR]("a")
@@ -143,6 +151,14 @@ _, err := sq.Exec(db, sq.
 To use the query builder, you must first [define your table structs](https://bokwoon.neocities.org/sq.html#table-structs).
 
 ```go
+type ACTOR struct {
+    sq.TableStruct
+    ACTOR_ID    sq.NumberField
+    FIRST_NAME  sq.StringField
+    LAST_NAME   sq.StringField
+    LAST_UPDATE sq.TimeField
+}
+
 db, err := sql.Open("postgres", "postgres://username:password@localhost:5432/sakila?sslmode=disable")
 
 a := sq.New[ACTOR]("a")
