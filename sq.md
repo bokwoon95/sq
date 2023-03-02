@@ -3065,7 +3065,7 @@ Note that if the `tenantID` cannot be retrieved from the context, `(EMPLOYEES).P
 Here is how to use employees table.
 ```go
 // get tenantID from somewhere and put it into the context
-ctx := context.Background().WithValue("tenantID", 1)
+ctx := context.WithValue(context.Background(), "tenantID", 1)
 e := sq.New[EMPLOYEES]("")
 
 // Query 1
