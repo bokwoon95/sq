@@ -2847,7 +2847,7 @@ type ACTOR struct {
 }
 
 a := sq.New[ACTOR]("")
-q, err := sq.CompileFetch(sq.
+compiledQuery, err := sq.CompileFetch(sq.
     From(a).
     Where(a.ACTOR_ID.Eq(sq.IntParam("actor_id", 0))). // actor_id is a rebindable param, with default value 0
     SetDialect(sq.DialectPostgres),
@@ -2862,13 +2862,13 @@ q, err := sq.CompileFetch(sq.
 if err != nil {
 }
 
-actor, err := getActor.FetchOne(db, sq.Params{"actor_id": 1})
+actor, err := compiledQuery.FetchOne(db, sq.Params{"actor_id": 1})
 fmt.Println(actor) // {ActorID: 1, FirstName: "PENELOPE", LastName: "GUINESS"}
 
-actor, err = getActor.FetchOne(db, sq.Params{"actor_id": 2})
+actor, err = compiledQuery.FetchOne(db, sq.Params{"actor_id": 2})
 fmt.Println(actor) // {ActorID: 2, FirstName: "NICK", LastName: "WAHLBERG"}
 
-actor, err = getActor.FetchOne(db, sq.Params{"actor_id": 3})
+actor, err = compiledQuery.FetchOne(db, sq.Params{"actor_id": 3})
 fmt.Println(actor) // {ActorID: 3, FirstName: "ED", LastName: "CHASE"}
 ```
 
@@ -2883,7 +2883,7 @@ type ACTOR struct {
 }
 
 a := sq.New[ACTOR]("")
-q, err = sq.CompileExec(sq.
+compiledQuery, err = sq.CompileExec(sq.
     InsertInto(a).
     ColumnValues(func(col *sq.Column) error {
         col.Set(a.ACTOR_ID, sql.Named("actor_id", nil))     // actor_id is a rebindable param, with default value nil
@@ -2896,21 +2896,21 @@ q, err = sq.CompileExec(sq.
 if err != nil {
 }
 
-_, err := insertActor.Exec(db, sq.Params{
+_, err := compiledQuery.Exec(db, sq.Params{
     "actor_id":   1,
     "first_name": "PENELOPE",
     "last_name":  "GUINESS",
 })
 // INSERT INTO actor (actor_id, first_name, last_name) VALUES (1, 'PENELOPE', 'GUINESS')
 
-_, err = insertActor.Exec(db, sq.Params{
+_, err = compiledQuery.Exec(db, sq.Params{
     "actor_id":   2,
     "first_name": "NICK",
     "last_name":  "WAHLBERG",
 })
 // INSERT INTO actor (actor_id, first_name, last_name) VALUES (2, 'NICK', 'WAHLBERG')
 
-_, err = insertActor.Exec(db, sq.Params{
+_, err = compiledQuery.Exec(db, sq.Params{
     "actor_id":   3,
     "first_name": "ED",
     "last_name":  "CHASE",
