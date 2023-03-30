@@ -388,9 +388,16 @@ func (r RowValue) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffe
 		if i > 0 {
 			buf.WriteString(", ")
 		}
+		_, isQuery := value.(Query)
+		if isQuery {
+			buf.WriteString("(")
+		}
 		err = WriteValue(ctx, dialect, buf, args, params, value)
 		if err != nil {
 			return fmt.Errorf("rowvalue #%d: %w", i+1, err)
+		}
+		if isQuery {
+			buf.WriteString(")")
 		}
 	}
 	buf.WriteString(")")

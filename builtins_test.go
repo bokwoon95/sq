@@ -347,6 +347,11 @@ func TestRowValuesFieldsAssignments(t *testing.T) {
 		description: "RowValue", item: RowValue{1, 2, 3},
 		wantQuery: "(?, ?, ?)", wantArgs: []any{1, 2, 3},
 	}, {
+		description: "RowValue with query",
+		item:        RowValue{1, 2, Queryf("SELECT {}", 3)},
+		wantQuery:   "(?, ?, (SELECT ?))",
+		wantArgs:    []any{1, 2, 3},
+	}, {
 		description: "RowValue In",
 		item:        RowValue{1, 2, 3}.In(RowValues{{4, 5, 6}, {7, 8, 9}}),
 		wantQuery:   "(?, ?, ?) IN ((?, ?, ?), (?, ?, ?))",
