@@ -182,7 +182,7 @@ func (q DeleteQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 	}
 	// RETURNING
 	if len(q.ReturningFields) > 0 && dialect != DialectSQLServer {
-		if dialect != DialectPostgres && dialect != DialectSQLite {
+		if dialect != DialectPostgres && dialect != DialectSQLite && dialect != DialectMySQL {
 			return fmt.Errorf("%s UPDATE does not support RETURNING", dialect)
 		}
 		buf.WriteString(" RETURNING ")
@@ -260,7 +260,7 @@ func (q SQLiteDeleteQuery) Where(predicates ...Predicate) SQLiteDeleteQuery {
 	return q
 }
 
-// Returning sets the ReturningFields field of the SQLiteDeleteQuery.
+// Returning appends fields to the RETURNING clause of the SQLiteDeleteQuery.
 func (q SQLiteDeleteQuery) Returning(fields ...Field) SQLiteDeleteQuery {
 	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
@@ -353,7 +353,7 @@ func (q PostgresDeleteQuery) Where(predicates ...Predicate) PostgresDeleteQuery 
 	return q
 }
 
-// Returning sets the ReturningFields field of the PostgresDeleteQuery.
+// Returning appends fields to the RETURNING clause of the PostgresDeleteQuery.
 func (q PostgresDeleteQuery) Returning(fields ...Field) PostgresDeleteQuery {
 	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
@@ -464,6 +464,12 @@ func (q MySQLDeleteQuery) OrderBy(fields ...Field) MySQLDeleteQuery {
 // Limit sets the LimitRows field of the MySQLDeleteQuery.
 func (q MySQLDeleteQuery) Limit(limit any) MySQLDeleteQuery {
 	q.LimitRows = limit
+	return q
+}
+
+// Returning appends fields to the RETURNING clause of the MySQLDeleteQuery.
+func (q MySQLDeleteQuery) Returning(fields ...Field) MySQLDeleteQuery {
+	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
 }
 

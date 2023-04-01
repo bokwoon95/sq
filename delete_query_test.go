@@ -33,7 +33,7 @@ func TestSQLiteDeleteQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("Where Returning", func(t *testing.T) {
+	t.Run("Delete Returning", func(t *testing.T) {
 		t.Parallel()
 		var tt TestTable
 		tt.item = SQLite.
@@ -77,7 +77,7 @@ func TestPostgresDeleteQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("Where Returning", func(t *testing.T) {
+	t.Run("Delete Returning", func(t *testing.T) {
 		t.Parallel()
 		var tt TestTable
 		tt.item = Postgres.
@@ -125,7 +125,7 @@ func TestMySQLDeleteQuery(t *testing.T) {
 		LAST_NAME   StringField
 		LAST_UPDATE TimeField
 	}
-	a := New[ACTOR]("a")
+	a := New[ACTOR]("")
 
 	t.Run("basic", func(t *testing.T) {
 		t.Parallel()
@@ -152,8 +152,8 @@ func TestMySQLDeleteQuery(t *testing.T) {
 			DeleteFrom(a).
 			Where(a.ACTOR_ID.EqInt(1))
 		tt.wantQuery = "WITH cte AS (SELECT 1)" +
-			" DELETE FROM actor AS a" +
-			" WHERE a.actor_id = ?"
+			" DELETE FROM actor" +
+			" WHERE actor.actor_id = ?"
 		tt.wantArgs = []any{1}
 		tt.assert(t)
 	})
@@ -165,10 +165,26 @@ func TestMySQLDeleteQuery(t *testing.T) {
 			DeleteFrom(a).
 			OrderBy(a.ACTOR_ID).
 			Limit(5)
-		tt.wantQuery = "DELETE FROM actor AS a" +
-			" ORDER BY a.actor_id" +
+		tt.wantQuery = "DELETE FROM actor" +
+			" ORDER BY actor.actor_id" +
 			" LIMIT ?"
 		tt.wantArgs = []any{5}
+		tt.assert(t)
+	})
+
+	t.Run("Delete Returning", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		tt.item = MySQL.
+			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
+			DeleteFrom(a).
+			Where(a.ACTOR_ID.EqInt(1)).
+			Returning(a.FIRST_NAME, a.LAST_NAME)
+		tt.wantQuery = "WITH cte AS (SELECT 1)" +
+			" DELETE FROM actor" +
+			" WHERE actor.actor_id = ?" +
+			" RETURNING actor.first_name, actor.last_name"
+		tt.wantArgs = []any{1}
 		tt.assert(t)
 	})
 }
@@ -294,13 +310,6 @@ func TestDeleteQuery(t *testing.T) {
 			Dialect:     DialectPostgres,
 			DeleteTable: Expr("tbl"),
 			LimitRows:   5,
-		},
-	}, {
-		description: "dialect does not support RETURNING",
-		item: DeleteQuery{
-			Dialect:         DialectMySQL,
-			DeleteTable:     Expr("tbl"),
-			ReturningFields: Fields{Expr("f1")},
 		},
 	}}
 

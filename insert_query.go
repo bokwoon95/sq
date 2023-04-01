@@ -129,7 +129,7 @@ func (q InsertQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 	}
 	// RETURNING
 	if len(q.ReturningFields) > 0 && dialect != DialectSQLServer {
-		if dialect != DialectPostgres && dialect != DialectSQLite {
+		if dialect != DialectPostgres && dialect != DialectSQLite && dialect != DialectMySQL {
 			return fmt.Errorf("%s INSERT does not support RETURNING", dialect)
 		}
 		buf.WriteString(" RETURNING ")
@@ -361,7 +361,7 @@ func (q SQLiteInsertQuery) Where(predicates ...Predicate) SQLiteInsertQuery {
 	return q
 }
 
-// Returning sets the ReturningFields of the SQLiteInsertQuery.
+// Returning adds fields to the RETURNING clause of the SQLiteInsertQuery.
 func (q SQLiteInsertQuery) Returning(fields ...Field) SQLiteInsertQuery {
 	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
@@ -468,7 +468,7 @@ func (q PostgresInsertQuery) Where(predicates ...Predicate) PostgresInsertQuery 
 	return q
 }
 
-// Returning sets the ReturningFields of the PostgresInsertQuery.
+// Returning adds fields to the RETURNING clause of the PostgresInsertQuery.
 func (q PostgresInsertQuery) Returning(fields ...Field) PostgresInsertQuery {
 	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
@@ -556,6 +556,12 @@ func (q MySQLInsertQuery) Select(query Query) MySQLInsertQuery {
 // MySQLInsertQuery.
 func (q MySQLInsertQuery) OnDuplicateKeyUpdate(assignments ...Assignment) MySQLInsertQuery {
 	q.Conflict.Resolution = assignments
+	return q
+}
+
+// Returning adds fields to the RETURNING clause of the MySQLInsertQuery.
+func (q MySQLInsertQuery) Returning(fields ...Field) MySQLInsertQuery {
+	q.ReturningFields = append(q.ReturningFields, fields...)
 	return q
 }
 

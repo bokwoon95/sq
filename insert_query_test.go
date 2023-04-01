@@ -70,7 +70,7 @@ func TestSQLiteInsertQuery(t *testing.T) {
 		tt.assert(t)
 	})
 
-	t.Run("Select Returning", func(t *testing.T) {
+	t.Run("Insert Returning", func(t *testing.T) {
 		t.Parallel()
 		var tt TestTable
 		tt.item = SQLite.
@@ -198,7 +198,7 @@ func TestPostgresInsertQuery(t *testing.T) {
 		tt.assert(t)
 	})
 
-	t.Run("Select Returning", func(t *testing.T) {
+	t.Run("Insert Returning", func(t *testing.T) {
 		t.Parallel()
 		var tt TestTable
 		tt.item = Postgres.
@@ -319,6 +319,20 @@ func TestMySQLInsertQuery(t *testing.T) {
 		tt.wantQuery = "INSERT INTO actor (first_name, last_name)" +
 			" VALUES (?, ?), (?, ?)"
 		tt.wantArgs = []any{"bob", "the builder", "alice", "in wonderland"}
+		tt.assert(t)
+	})
+
+	t.Run("Insert Returning", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		tt.item = MySQL.
+			InsertInto(a).
+			Columns(a.FIRST_NAME, a.LAST_NAME).
+			Select(SQLite.Select(a.FIRST_NAME, a.LAST_NAME).From(a)).
+			Returning(a.ACTOR_ID)
+		tt.wantQuery = "INSERT INTO actor (first_name, last_name)" +
+			" SELECT actor.first_name, actor.last_name FROM actor" +
+			" RETURNING actor.actor_id"
 		tt.assert(t)
 	})
 
@@ -528,14 +542,6 @@ func TestInsertQuery(t *testing.T) {
 			InsertTable:  Expr("tbl"),
 			ColumnMapper: colmapper,
 			Conflict:     ConflictClause{Fields: Fields{nil}},
-		},
-	}, {
-		description: "dialect does not support RETURNING",
-		item: InsertQuery{
-			Dialect:         DialectMySQL,
-			InsertTable:     Expr("tbl"),
-			ColumnMapper:    colmapper,
-			ReturningFields: Fields{f1, f2},
 		},
 	}}
 
