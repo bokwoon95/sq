@@ -502,11 +502,11 @@ func Max(field Field) Expression { return Expr("MAX({})", field) }
 // SelectValues represents a table literal comprised of SELECT statements
 // UNION-ed together e.g.
 //
-//   (SELECT 1 AS a, 2 AS b, 3 AS c
-//   UNION ALL
-//   SELECT 4, 5, 6
-//   UNION ALL
-//   SELECT 7, 8, 9) AS tbl
+//	(SELECT 1 AS a, 2 AS b, 3 AS c
+//	UNION ALL
+//	SELECT 4, 5, 6
+//	UNION ALL
+//	SELECT 7, 8, 9) AS tbl
 type SelectValues struct {
 	Alias     string
 	Columns   []string
@@ -554,15 +554,6 @@ func (vs SelectValues) Field(name string) AnyField {
 // as the second result.
 func (vs SelectValues) SetFetchableFields([]Field) (query Query, ok bool) { return vs, false }
 
-// GetFetchableFields returns the fetchable fields of the SelectValues.
-func (vs SelectValues) GetFetchableFields() []Field {
-	fields := make([]Field, len(vs.Columns))
-	for i, column := range vs.Columns {
-		fields[i] = NewAnyField(column, NewTableStruct("", "", vs.Alias))
-	}
-	return fields
-}
-
 // GetDialect implements the Query interface. It always returns an empty
 // string.
 func (vs SelectValues) GetDialect() string { return "" }
@@ -575,10 +566,11 @@ func (vs SelectValues) IsTable() {}
 
 // TableValues represents a table literal created by the VALUES clause e.g.
 //
-//   (VALUES
-//     (1, 2, 3),
-//     (4, 5, 6),
-//     (7, 8, 9)) AS tbl (a, b, c)
+// (VALUES
+//
+//	(1, 2, 3),
+//	(4, 5, 6),
+//	(7, 8, 9)) AS tbl (a, b, c)
 type TableValues struct {
 	Alias     string
 	Columns   []string
@@ -592,6 +584,9 @@ var _ interface {
 
 // WriteSQL implements the SQLWriter interface.
 func (vs TableValues) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	if len(vs.RowValues) == 0 {
+		return nil
+	}
 	var err error
 	buf.WriteString("VALUES ")
 	for i, rowvalue := range vs.RowValues {
@@ -628,15 +623,6 @@ func (vs TableValues) Field(name string) AnyField {
 // SetFetchableFields implements the Query interface. It always returns false
 // as the second result.
 func (vs TableValues) SetFetchableFields([]Field) (query Query, ok bool) { return vs, false }
-
-// GetFetchableFields returns the fetchable fields of the TableValues.
-func (vs TableValues) GetFetchableFields() []Field {
-	fields := make([]Field, len(vs.Columns))
-	for i, column := range vs.Columns {
-		fields[i] = NewAnyField(column, NewTableStruct("", "", vs.Alias))
-	}
-	return fields
-}
 
 // GetDialect implements the Query interface. It always returns an empty
 // string.

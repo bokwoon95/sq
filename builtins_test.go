@@ -30,6 +30,9 @@ func TestExpression(t *testing.T) {
 		description: "In", item: Expr("age").In([]int{18, 21, 32}),
 		wantQuery: "age IN (?, ?, ?)", wantArgs: []any{18, 21, 32},
 	}, {
+		description: "NotIn", item: Expr("age").NotIn([]int{18, 21, 32}),
+		wantQuery: "age NOT IN (?, ?, ?)", wantArgs: []any{18, 21, 32},
+	}, {
 		description: "Eq", item: Expr("age").Eq(34),
 		wantQuery: "age = ?", wantArgs: []any{34},
 	}, {
@@ -357,6 +360,11 @@ func TestRowValuesFieldsAssignments(t *testing.T) {
 		wantQuery:   "(?, ?, ?) IN ((?, ?, ?), (?, ?, ?))",
 		wantArgs:    []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
 	}, {
+		description: "RowValue NotIn",
+		item:        RowValue{1, 2, 3}.NotIn(RowValues{{4, 5, 6}, {7, 8, 9}}),
+		wantQuery:   "(?, ?, ?) NOT IN ((?, ?, ?), (?, ?, ?))",
+		wantArgs:    []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}, {
 		description: "RowValue Eq",
 		item:        RowValue{1, 2, 3}.Eq(RowValue{4, 5, 6}),
 		wantQuery:   "(?, ?, ?) = (?, ?, ?)",
@@ -451,6 +459,19 @@ func Test_in_cmp(t *testing.T) {
 	}, {
 		description: "Query IN RowValue", item: In(Queryf("SELECT {}", "tom"), RowValue{"tom", "dick", "harry"}),
 		wantQuery: "(SELECT ?) IN (?, ?, ?)", wantArgs: []any{"tom", "tom", "dick", "harry"},
+	}, {
+		description: "!Query NOT IN !RowValue",
+		item:        NotIn(Expr("{}", "tom"), Queryf("SELECT name FROM users WHERE name LIKE {}", "t%")),
+		wantQuery:   "? NOT IN (SELECT name FROM users WHERE name LIKE ?)", wantArgs: []any{"tom", "t%"},
+	}, {
+		description: "!Query NOT IN RowValue", item: NotIn(Expr("name"), RowValue{"tom", "dick", "harry"}),
+		wantQuery: "name NOT IN (?, ?, ?)", wantArgs: []any{"tom", "dick", "harry"},
+	}, {
+		description: "Query NOT IN !RowValue", item: NotIn(Queryf("SELECT {}", "tom"), []string{"tom", "dick", "harry"}),
+		wantQuery: "(SELECT ?) NOT IN (?, ?, ?)", wantArgs: []any{"tom", "tom", "dick", "harry"},
+	}, {
+		description: "Query NOT IN RowValue", item: NotIn(Queryf("SELECT {}", "tom"), RowValue{"tom", "dick", "harry"}),
+		wantQuery: "(SELECT ?) NOT IN (?, ?, ?)", wantArgs: []any{"tom", "tom", "dick", "harry"},
 	}, {
 		description: "!Query = !Query", item: cmp("=", 1, 1),
 		wantQuery: "? = ?", wantArgs: []any{1, 1},
@@ -572,75 +593,6 @@ func Test_appendPredicates(t *testing.T) {
 	}
 }
 
-func Test_substituteParams(t *testing.T) {
-	t.Run("no params provided", func(t *testing.T) {
-		t.Parallel()
-		args := []any{1, 2, 3}
-		params := map[string][]int{"one": {0}, "two": {1}, "three": {2}}
-		gotArgs, err := substituteParams("", args, params, nil)
-		if err != nil {
-			t.Fatal(testutil.Callers(), err)
-		}
-		wantArgs := []any{1, 2, 3}
-		if diff := testutil.Diff(gotArgs, wantArgs); diff != "" {
-			t.Error(testutil.Callers(), diff)
-		}
-	})
-
-	t.Run("not all params provided", func(t *testing.T) {
-		t.Parallel()
-		args := []any{1, 2, 3}
-		params := map[string][]int{"one": {0}, "two": {1}, "three": {2}}
-		paramValues := Params{"one": "One", "two": "Two"}
-		gotArgs, err := substituteParams("", args, params, paramValues)
-		if err != nil {
-			t.Fatal(testutil.Callers(), err)
-		}
-		wantArgs := []any{"One", "Two", 3}
-		if diff := testutil.Diff(gotArgs, wantArgs); diff != "" {
-			t.Error(testutil.Callers(), diff)
-		}
-	})
-
-	t.Run("params substituted", func(t *testing.T) {
-		t.Parallel()
-		type Data struct {
-			id   int
-			name string
-		}
-		args := []any{
-			0,
-			sql.Named("one", 1),
-			sql.Named("two", 2),
-			3,
-		}
-		params := map[string][]int{
-			"zero":  {0},
-			"one":   {1},
-			"two":   {2},
-			"three": {3},
-		}
-		paramValues := Params{
-			"one":   "[one]",
-			"two":   "[two]",
-			"three": "[three]",
-		}
-		wantArgs := []any{
-			0,
-			sql.Named("one", "[one]"),
-			sql.Named("two", "[two]"),
-			"[three]",
-		}
-		gotArgs, err := substituteParams("", args, params, paramValues)
-		if err != nil {
-			t.Fatal(testutil.Callers(), err)
-		}
-		if diff := testutil.Diff(gotArgs, wantArgs); diff != "" {
-			t.Error(testutil.Callers(), diff)
-		}
-	})
-}
-
 func Test_writeTop(t *testing.T) {
 	type TT struct {
 		description     string
@@ -720,6 +672,8 @@ func Test_writeTop(t *testing.T) {
 	}
 }
 
+// TODO: remove all uses of TestTable, manually write each assert. Fewer levels
+// of BS indirection when you need to debug something.
 type TestTable struct {
 	description string
 	ctx         context.Context

@@ -55,7 +55,7 @@ func TestSQLiteInsertQuery(t *testing.T) {
 		tt.item = SQLite.
 			With(NewCTE("cte", nil, Queryf("SELECT 1"))).
 			InsertInto(a).
-			ColumnValues(func(col *Column){
+			ColumnValues(func(col *Column) {
 				// bob
 				col.SetString(a.FIRST_NAME, "bob")
 				col.SetString(a.LAST_NAME, "the builder")

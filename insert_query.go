@@ -36,7 +36,7 @@ func (q InsertQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 			dialect:  q.Dialect,
 			isUpdate: false,
 		}
-		defer recoverPanic(&err)
+		defer mapperFunctionPanicked(&err)
 		q.ColumnMapper(col)
 		if err != nil {
 			return err

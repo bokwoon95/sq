@@ -3,7 +3,6 @@ package sq
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -30,8 +29,8 @@ func Expr(format string, values ...any) Expression {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (e Expression) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	err := Writef(ctx, dialect, buf, args, params, e.format, e.values)
+func (expr Expression) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	err := Writef(ctx, dialect, buf, args, params, expr.format, expr.values)
 	if err != nil {
 		return err
 	}
@@ -39,67 +38,70 @@ func (e Expression) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buf
 }
 
 // As returns a new Expression with the given alias.
-func (e Expression) As(alias string) Expression {
-	e.alias = alias
-	return e
+func (expr Expression) As(alias string) Expression {
+	expr.alias = alias
+	return expr
 }
 
-// In returns an 'expr IN (val)' Predicate.
-func (e Expression) In(val any) Predicate { return In(e, val) }
+// In returns an 'expr IN (value)' Predicate.
+func (expr Expression) In(value any) Predicate { return In(expr, value) }
 
-// Eq returns an 'expr = val' Predicate.
-func (e Expression) Eq(val any) Predicate { return cmp("=", e, val) }
+// In returns an 'expr NOT IN (value)' Predicate.
+func (expr Expression) NotIn(value any) Predicate { return NotIn(expr, value) }
 
-// Ne returns an 'expr <> val' Predicate.
-func (e Expression) Ne(val any) Predicate { return cmp("<>", e, val) }
+// Eq returns an 'expr = value' Predicate.
+func (expr Expression) Eq(value any) Predicate { return cmp("=", expr, value) }
 
-// Lt returns an 'expr < val' Predicate.
-func (e Expression) Lt(val any) Predicate { return cmp("<", e, val) }
+// Ne returns an 'expr <> value' Predicate.
+func (expr Expression) Ne(value any) Predicate { return cmp("<>", expr, value) }
 
-// Le returns an 'expr <= val' Predicate.
-func (e Expression) Le(val any) Predicate { return cmp("<=", e, val) }
+// Lt returns an 'expr < value' Predicate.
+func (expr Expression) Lt(value any) Predicate { return cmp("<", expr, value) }
 
-// Gt returns an 'expr > val' Predicate.
-func (e Expression) Gt(val any) Predicate { return cmp(">", e, val) }
+// Le returns an 'expr <= value' Predicate.
+func (expr Expression) Le(value any) Predicate { return cmp("<=", expr, value) }
 
-// Ge returns an 'expr >= val' Predicate.
-func (e Expression) Ge(val any) Predicate { return cmp(">=", e, val) }
+// Gt returns an 'expr > value' Predicate.
+func (expr Expression) Gt(value any) Predicate { return cmp(">", expr, value) }
+
+// Ge returns an 'expr >= value' Predicate.
+func (expr Expression) Ge(value any) Predicate { return cmp(">=", expr, value) }
 
 // GetAlias returns the alias of the Expression.
-func (e Expression) GetAlias() string { return e.alias }
+func (expr Expression) GetAlias() string { return expr.alias }
 
-// AssertTable implements the Table interface.
-func (e Expression) IsTable() {}
+// IsTable implements the Table interface.
+func (expr Expression) IsTable() {}
 
-// AssertField implements the Field interface.
-func (e Expression) IsField() {}
+// IsField implements the Field interface.
+func (expr Expression) IsField() {}
 
-// AssertArray implements the Array interface.
-func (e Expression) IsArray() {}
+// IsArray implements the Array interface.
+func (expr Expression) IsArray() {}
 
-// AssertBinary implements the Binary interface.
-func (e Expression) IsBinary() {}
+// IsBinary implements the Binary interface.
+func (expr Expression) IsBinary() {}
 
-// AssertBoolean implements the Boolean interface.
-func (e Expression) IsBoolean() {}
+// IsBoolean implements the Boolean interface.
+func (expr Expression) IsBoolean() {}
 
-// AssertEnum implements the Enum interface.
-func (e Expression) IsEnum() {}
+// IsEnum implements the Enum interface.
+func (expr Expression) IsEnum() {}
 
-// AssertJSON implements the JSON interface.
-func (e Expression) IsJSON() {}
+// IsJSON implements the JSON interface.
+func (expr Expression) IsJSON() {}
 
-// AssertNumber implements the Number interface.
-func (e Expression) IsNumber() {}
+// IsNumber implements the Number interface.
+func (expr Expression) IsNumber() {}
 
-// AssertString implements the String interface.
-func (e Expression) IsString() {}
+// IsString implements the String interface.
+func (expr Expression) IsString() {}
 
-// AssertTime implements the Time interface.
-func (e Expression) IsTime() {}
+// IsTime implements the Time interface.
+func (expr Expression) IsTime() {}
 
-// AssertUUIDType implements the UUID interface.
-func (e Expression) IsUUID() {}
+// IsUUID implements the UUID interface.
+func (expr Expression) IsUUID() {}
 
 func (e Expression) IsAssignment() {}
 
@@ -185,8 +187,19 @@ func (q CustomQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 
 // SetFetchableFields sets the fetchable fields of the query.
 func (q CustomQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.fields = fields
-	return q, true
+	format := q.format
+	for i := strings.IndexByte(format, '{'); i >= 0; i = strings.IndexByte(format, '{') {
+		if i+2 <= len(format) && format[i:i+2] == "{{" {
+			format = format[i+2:]
+			continue
+		}
+		if i+3 <= len(format) && format[i:i+3] == "{*}" {
+			q.fields = fields
+			return q, true
+		}
+		format = format[i+1:]
+	}
+	return q, false
 }
 
 // GetFetchableFields gets the fetchable fields of the query.
@@ -297,10 +310,10 @@ func (p VariadicPredicate) As(alias string) VariadicPredicate {
 // GetAlias returns the alias of the VariadicPredicate.
 func (p VariadicPredicate) GetAlias() string { return p.alias }
 
-// AssertField implements the Field interface.
+// IsField implements the Field interface.
 func (p VariadicPredicate) IsField() {}
 
-// AssertBooleanType implements the Predicate interface.
+// IsBooleanType implements the Predicate interface.
 func (p VariadicPredicate) IsBoolean() {}
 
 // assignment represents assigning a value to a Field.
@@ -353,7 +366,7 @@ func (a assignment) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buf
 	return nil
 }
 
-// AssertAssignment implements the Assignment interface.
+// IsAssignment implements the Assignment interface.
 func (a assignment) IsAssignment() {}
 
 // Assignments represents a list of Assignments e.g. x = 1, y = 2, z = 3.
@@ -404,10 +417,13 @@ func (r RowValue) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffe
 	return nil
 }
 
-// In returns an 'rowvalue IN (val)' Predicate.
+// In returns an 'rowvalue IN (value)' Predicate.
 func (r RowValue) In(v any) Predicate { return In(r, v) }
 
-// Eq returns an 'rowvalue = val' Predicate.
+// NotIn returns an 'rowvalue NOT IN (value)' Predicate.
+func (r RowValue) NotIn(v any) Predicate { return NotIn(r, v) }
+
+// Eq returns an 'rowvalue = value' Predicate.
 func (r RowValue) Eq(v any) Predicate { return cmp("=", r, v) }
 
 // RowValues represents a list of RowValues e.g. (x, y, z), (a, b, c).
@@ -544,11 +560,11 @@ func Gt(x, y any) Predicate { return cmp(">", x, y) }
 // Ge returns an 'x >= y' Predicate.
 func Ge(x, y any) Predicate { return cmp(">=", x, y) }
 
-// Exists returns an 'EXISTS (q)' Predicate.
-func Exists(q Query) Predicate { return Expr("EXISTS ({})", q) }
+// Exists returns an 'EXISTS (query)' Predicate.
+func Exists(query Query) Predicate { return Expr("EXISTS ({})", query) }
 
-// NotExists returns a 'NOT EXISTS (q)' Predicate.
-func NotExists(q Query) Predicate { return Expr("NOT EXISTS ({})", q) }
+// NotExists returns a 'NOT EXISTS (query)' Predicate.
+func NotExists(query Query) Predicate { return Expr("NOT EXISTS ({})", query) }
 
 // In returns an 'x IN (y)' Predicate.
 func In(x, y any) Predicate {
@@ -562,6 +578,21 @@ func In(x, y any) Predicate {
 		return Expr("({}) IN ({})", x, y)
 	} else {
 		return Expr("({}) IN {}", x, y)
+	}
+}
+
+// NotIn returns an 'x NOT IN (y)' Predicate.
+func NotIn(x, y any) Predicate {
+	_, isQueryA := x.(Query)
+	_, isRowValueB := y.(RowValue)
+	if !isQueryA && !isRowValueB {
+		return Expr("{} NOT IN ({})", x, y)
+	} else if !isQueryA && isRowValueB {
+		return Expr("{} NOT IN {}", x, y)
+	} else if isQueryA && !isRowValueB {
+		return Expr("({}) NOT IN ({})", x, y)
+	} else {
+		return Expr("({}) NOT IN {}", x, y)
 	}
 }
 
@@ -610,35 +641,6 @@ func appendPredicates(predicate Predicate, predicates []Predicate) VariadicPredi
 	p2.Predicates[0] = predicate
 	copy(p2.Predicates[1:], predicates)
 	return p2
-}
-
-// substituteParams will return an args slice by substituting values from the
-// given Params into the SQLOutput. The underlying SQLOutput is untouched.
-func substituteParams(dialect string, args []any, paramIndexes map[string][]int, paramValues map[string]any) ([]any, error) {
-	if len(paramValues) == 0 {
-		return args, nil
-	}
-	newArgs := make([]any, len(args))
-	copy(newArgs, args)
-	var err error
-	for name, value := range paramValues {
-		if dialectValuer, ok := value.(DialectValuer); ok {
-			value, err = dialectValuer.DialectValuer(dialect)
-			if err != nil {
-				return nil, err
-			}
-		}
-		indexes := paramIndexes[name]
-		for _, index := range indexes {
-			switch arg := newArgs[index].(type) {
-			case sql.NamedArg:
-				newArgs[index] = sql.NamedArg{Name: arg.Name, Value: value}
-			default:
-				newArgs[index] = value
-			}
-		}
-	}
-	return newArgs, nil
 }
 
 func writeTop(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int, topLimit, topPercentLimit any, withTies bool) error {

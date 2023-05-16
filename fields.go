@@ -5,16 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/bokwoon95/sq/internal/googleuuid"
-	"github.com/bokwoon95/sq/internal/pqarray"
 )
 
 // Identifier represents an SQL identifier. If necessary, it will be quoted
@@ -53,132 +48,139 @@ func NewAnyField(name string, tbl TableStruct) AnyField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f AnyField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field AnyField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new AnyField with the given alias.
-func (f AnyField) As(alias string) AnyField {
-	f.alias = alias
-	return f
+func (field AnyField) As(alias string) AnyField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new AnyField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f AnyField) Asc() AnyField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field AnyField) Asc() AnyField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new AnyField indicating that it should be ordered in descending
 // order i.e. 'ORDER BY field DESC'.
-func (f AnyField) Desc() AnyField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field AnyField) Desc() AnyField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new NumberField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f AnyField) NullsLast() AnyField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field AnyField) NullsLast() AnyField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new NumberField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f AnyField) NullsFirst() AnyField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field AnyField) NullsFirst() AnyField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f AnyField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field AnyField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f AnyField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field AnyField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f AnyField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field AnyField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f AnyField) In(val any) Predicate { return In(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field AnyField) In(value any) Predicate { return In(field, value) }
 
-// Eq returns a 'field = val' Predicate.
-func (f AnyField) Eq(val any) Predicate { return Eq(f, val) }
+// In returns a 'field NOT IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field NOT IN (x, y, z)'.
+func (field AnyField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// Ne returns a 'field <> val' Predicate.
-func (f AnyField) Ne(val any) Predicate { return Ne(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field AnyField) Eq(value any) Predicate { return Eq(field, value) }
 
-// Lt returns a 'field < val' Predicate.
-func (f AnyField) Lt(val any) Predicate { return Lt(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field AnyField) Ne(value any) Predicate { return Ne(field, value) }
 
-// Le returns a 'field <= val' Predicate.
-func (f AnyField) Le(val any) Predicate { return Le(f, val) }
+// Lt returns a 'field < value' Predicate.
+func (field AnyField) Lt(value any) Predicate { return Lt(field, value) }
 
-// Gt returns a 'field > val' Predicate.
-func (f AnyField) Gt(val any) Predicate { return Gt(f, val) }
+// Le returns a 'field <= value' Predicate.
+func (field AnyField) Le(value any) Predicate { return Le(field, value) }
 
-// Ge returns a 'field >= val' Predicate.
-func (f AnyField) Ge(val any) Predicate { return Ge(f, val) }
+// Gt returns a 'field > value' Predicate.
+func (field AnyField) Gt(value any) Predicate { return Gt(field, value) }
+
+// Ge returns a 'field >= value' Predicate.
+func (field AnyField) Ge(value any) Predicate { return Ge(field, value) }
 
 // Expr returns an expression where the field is prepended to the front of the
 // expression.
-func (f AnyField) Expr(format string, values ...any) Expression {
-	values = append(values, f)
+func (field AnyField) Expr(format string, values ...any) Expression {
+	values = append(values, field)
 	ordinal := len(values)
 	return Expr("{"+strconv.Itoa(ordinal)+"} "+format, values...)
 }
 
-// Set returns an Assignment assigning the val to the field.
-func (f AnyField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field AnyField) Set(value any) Assignment {
+	return Set(field, value)
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f AnyField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field AnyField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // GetAlias returns the alias of the AnyField.
-func (f AnyField) GetAlias() string { return f.alias }
+func (field AnyField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f AnyField) IsField() {}
+func (field AnyField) IsField() {}
 
 // IsArray implements the Array interface.
-func (f AnyField) IsArray() {}
+func (field AnyField) IsArray() {}
 
 // IsBinary implements the Binary interface.
-func (f AnyField) IsBinary() {}
+func (field AnyField) IsBinary() {}
 
 // IsBoolean implements the Boolean interface.
-func (f AnyField) IsBoolean() {}
+func (field AnyField) IsBoolean() {}
 
 // IsEnum implements the Enum interface.
-func (f AnyField) IsEnum() {}
+func (field AnyField) IsEnum() {}
 
 // IsJSON implements the JSONValue interface.
-func (f AnyField) IsJSON() {}
+func (field AnyField) IsJSON() {}
 
 // IsNumber implements the Number interface.
-func (f AnyField) IsNumber() {}
+func (field AnyField) IsNumber() {}
 
 // IsString implements the String interface.
-func (f AnyField) IsString() {}
+func (field AnyField) IsString() {}
 
 // IsTime implements the Time interface.
-func (f AnyField) IsTime() {}
+func (field AnyField) IsTime() {}
 
 // IsUUIDType implements the UUID interface.
-func (f AnyField) IsUUID() {}
+func (field AnyField) IsUUID() {}
 
 // ArrayField represents an SQL array field.
 type ArrayField struct {
@@ -199,76 +201,60 @@ func NewArrayField(fieldName string, tableName TableStruct) ArrayField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f ArrayField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
+func (field ArrayField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
 	return nil
 }
 
 // As returns a new ArrayField with the given alias.
-func (f ArrayField) As(alias string) ArrayField {
-	f.alias = alias
-	return f
+func (field ArrayField) As(alias string) ArrayField {
+	field.alias = alias
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f ArrayField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field ArrayField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f ArrayField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field ArrayField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNull returns a 'field IS NOT NULL' Predicate.
-func (f ArrayField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field ArrayField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f ArrayField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field ArrayField) Set(value any) Assignment {
+	switch value.(type) {
+	case SQLWriter:
+		return Set(field, value)
+	case []string, []int, []int64, []int32, []float64, []float32, []bool:
+		return Set(field, ArrayValue(value))
+	}
+	return Set(field, value)
+}
+
+// SetArray returns an Assignment assigning the value to the field. It wraps
+// the value with ArrayValue().
+func (field ArrayField) SetArray(value any) Assignment {
+	return Set(field, ArrayValue(value))
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f ArrayField) Setf(format string, values ...any) Assignment {
-	return Set(f, Expr(format, values...))
+func (field ArrayField) Setf(format string, values ...any) Assignment {
+	return Set(field, Expr(format, values...))
 }
-
-// SetArray is like Set but it wraps val with ArrayValue().
-func (f ArrayField) SetArray(val any) Assignment { return Set(f, ArrayValue(val)) }
 
 // GetAlias returns the alias of the ArrayField.
-func (f ArrayField) GetAlias() string { return f.alias }
+func (field ArrayField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f ArrayField) IsField() {}
+func (field ArrayField) IsField() {}
 
 // IsArray implements the Array interface.
-func (f ArrayField) IsArray() {}
-
-type arrayValue struct {
-	dialect string
-	value   any
-}
-
-// ArrayValue takes in a []string, []int64, []int32, []float64, []float32 or
-// []bool and returns a driver.Valuer for that type. For Postgres, it
-// serializes into a Postgres array. Otherwise, it serializes into a JSON
-// array.
-func ArrayValue(value any) driver.Valuer { return &arrayValue{value: value} }
-
-// Value implements the driver.Valuer interface.
-func (v *arrayValue) Value() (driver.Value, error) {
-	if v.dialect == DialectPostgres {
-		return pqarray.Array(v.value).Value()
-	}
-	var b strings.Builder
-	err := json.NewEncoder(&b).Encode(v.value)
-	return b.String(), err
-}
-
-// DialectValuer implements the DialectValuer interface.
-func (v *arrayValue) DialectValuer(dialect string) (driver.Valuer, error) {
-	v.dialect = dialect
-	return v, nil
-}
+func (field ArrayField) IsArray() {}
 
 // BinaryField represents an SQL binary field.
 type BinaryField struct {
@@ -291,97 +277,96 @@ func NewBinaryField(fieldName string, tableName TableStruct) BinaryField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f BinaryField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field BinaryField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new BinaryField with the given alias.
-func (f BinaryField) As(alias string) BinaryField {
-	f.alias = alias
-	return f
+func (field BinaryField) As(alias string) BinaryField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new BinaryField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f BinaryField) Asc() BinaryField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field BinaryField) Asc() BinaryField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new BinaryField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field DESC'.
-func (f BinaryField) Desc() BinaryField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field BinaryField) Desc() BinaryField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new BinaryField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f BinaryField) NullsLast() BinaryField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field BinaryField) NullsLast() BinaryField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new BinaryField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f BinaryField) NullsFirst() BinaryField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field BinaryField) NullsFirst() BinaryField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f BinaryField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field BinaryField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f BinaryField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field BinaryField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f BinaryField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field BinaryField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f BinaryField) In(val any) Predicate { return In(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field BinaryField) Eq(value Binary) Predicate { return Eq(field, value) }
 
-// Eq returns a 'field = val' Predicate.
-func (f BinaryField) Eq(val Binary) Predicate { return Eq(f, val) }
-
-// Ne returns a 'field <> val' Predicate.
-func (f BinaryField) Ne(val Binary) Predicate { return Ne(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field BinaryField) Ne(value Binary) Predicate { return Ne(field, value) }
 
 // EqBytes returns a 'field = b' Predicate.
-func (f BinaryField) EqBytes(b []byte) Predicate { return Eq(f, b) }
+func (field BinaryField) EqBytes(b []byte) Predicate { return Eq(field, b) }
 
 // NeBytes returns a 'field <> b' Predicate.
-func (f BinaryField) NeBytes(b []byte) Predicate { return Ne(f, b) }
+func (field BinaryField) NeBytes(b []byte) Predicate { return Ne(field, b) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f BinaryField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field BinaryField) Set(value any) Assignment {
+	return Set(field, value)
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f BinaryField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field BinaryField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // SetBytes returns an Assignment assigning a []byte to the field.
-func (f BinaryField) SetBytes(b []byte) Assignment { return Set(f, b) }
+func (field BinaryField) SetBytes(b []byte) Assignment { return Set(field, b) }
 
 // GetAlias returns the alias of the BinaryField.
-func (f BinaryField) GetAlias() string { return f.alias }
+func (field BinaryField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f BinaryField) IsField() {}
+func (field BinaryField) IsField() {}
 
 // IsBinary implements the Binary interface.
-func (f BinaryField) IsBinary() {}
+func (field BinaryField) IsBinary() {}
 
 // BooleanField represents an SQL boolean field.
 type BooleanField struct {
@@ -405,24 +390,24 @@ func NewBooleanField(fieldName string, tableName TableStruct) BooleanField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f BooleanField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field BooleanField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new BooleanField with the given alias.
-func (f BooleanField) As(alias string) BooleanField {
-	f.alias = alias
-	return f
+func (field BooleanField) As(alias string) BooleanField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new BooleanField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f BooleanField) Asc() BooleanField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field BooleanField) Asc() BooleanField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new BooleanField indicating that it should be ordered in
@@ -435,65 +420,67 @@ func (f BooleanField) Desc() BooleanField {
 
 // NullsLast returns a new BooleanField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f BooleanField) NullsLast() BooleanField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field BooleanField) NullsLast() BooleanField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new BooleanField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f BooleanField) NullsFirst() BooleanField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field BooleanField) NullsFirst() BooleanField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f BooleanField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field BooleanField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f BooleanField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field BooleanField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f BooleanField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field BooleanField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// Eq returns a 'field = val' Predicate.
-func (f BooleanField) Eq(val Boolean) Predicate { return Eq(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field BooleanField) Eq(value Boolean) Predicate { return Eq(field, value) }
 
-// Ne returns a 'field <> val' Predicate.
-func (f BooleanField) Ne(val Boolean) Predicate { return Ne(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field BooleanField) Ne(value Boolean) Predicate { return Ne(field, value) }
 
 // EqBool returns a 'field = b' Predicate.
-func (f BooleanField) EqBool(b bool) Predicate { return Eq(f, b) }
+func (field BooleanField) EqBool(b bool) Predicate { return Eq(field, b) }
 
 // NeBool returns a 'field <> b' Predicate.
-func (f BooleanField) NeBool(b bool) Predicate { return Ne(f, b) }
+func (field BooleanField) NeBool(b bool) Predicate { return Ne(field, b) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f BooleanField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field BooleanField) Set(value any) Assignment {
+	return Set(field, value)
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f BooleanField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field BooleanField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // SetBool returns an Assignment assigning a bool to the field i.e. 'field =
 // b'.
-func (f BooleanField) SetBool(b bool) Assignment { return Set(f, b) }
+func (field BooleanField) SetBool(b bool) Assignment { return Set(field, b) }
 
 // GetAlias returns the alias of the BooleanField.
-func (f BooleanField) GetAlias() string { return f.alias }
+func (field BooleanField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f BooleanField) IsField() {}
+func (field BooleanField) IsField() {}
 
 // IsBoolean implements the Boolean interface.
-func (f BooleanField) IsBoolean() {}
+func (field BooleanField) IsBoolean() {}
 
 // EnumField represents an SQL enum field.
 type EnumField struct {
@@ -514,153 +501,76 @@ func NewEnumField(name string, tbl TableStruct) EnumField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f EnumField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
+func (field EnumField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
 	return nil
 }
 
 // As returns a new EnumField with the given alias.
-func (f EnumField) As(alias string) EnumField {
-	f.alias = alias
-	return f
+func (field EnumField) As(alias string) EnumField {
+	field.alias = alias
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f EnumField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field EnumField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f EnumField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field EnumField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f EnumField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field EnumField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// Eq returns a 'field = val' Predicate. The value is passed as-is to the
-// database. If the value is an Enumeration type, you should be using EqEnum
-// instead.
-func (f EnumField) Eq(val any) Predicate { return Eq(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field EnumField) In(value any) Predicate { return In(field, value) }
 
-// Ne returns a 'field <> val' Predicate. The value is passed as-is to the
-// database. If the value is an Enumeration type, you should be using NeEnum
-// instead.
-func (f EnumField) Ne(val any) Predicate { return Ne(f, val) }
+// NotIn returns a 'field NOT IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field NOT IN (x, y, z)'.
+func (field EnumField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// EqEnum is like Eq but it wraps val with EnumValue().
-func (f EnumField) EqEnum(val Enumeration) Predicate { return Eq(f, EnumValue(val)) }
+// Eq returns a 'field = value' Predicate.
+func (field EnumField) Eq(value any) Predicate { return Eq(field, value) }
 
-// NeEnum  is like Ne but it wraps val with EnumValue().
-func (f EnumField) NeEnum(val Enumeration) Predicate { return Ne(f, EnumValue(val)) }
+// Ne returns a 'field <> value' Predicate.
+func (field EnumField) Ne(value any) Predicate { return Ne(field, value) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f EnumField) Set(val any) Assignment { return Set(f, val) }
+// EqEnum returns a 'field = value' Predicate. It wraps the value with
+// EnumValue().
+func (field EnumField) EqEnum(value Enumeration) Predicate { return Eq(field, EnumValue(value)) }
 
-// SetEnum is like Set but wraps val with EnumValue().
-func (f EnumField) SetEnum(val Enumeration) Assignment { return Set(f, EnumValue(val)) }
+// NeEnum returns a 'field <> value' Predicate. it wraps the value with
+// EnumValue().
+func (field EnumField) NeEnum(value Enumeration) Predicate { return Ne(field, EnumValue(value)) }
+
+// Set returns an Assignment assigning the value to the field.
+func (field EnumField) Set(value any) Assignment {
+	return Set(field, value)
+}
+
+// SetEnum returns an Assignment assigning the value to the field. It wraps the
+// value with EnumValue().
+func (field EnumField) SetEnum(value Enumeration) Assignment {
+	return Set(field, EnumValue(value))
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f EnumField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field EnumField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // GetAlias returns the alias of the EnumField.
-func (f EnumField) GetAlias() string { return f.alias }
+func (field EnumField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f EnumField) IsField() {}
+func (field EnumField) IsField() {}
 
 // IsEnum implements the Enum interface.
-func (f EnumField) IsEnum() {}
-
-type enumValue struct {
-	value Enumeration
-}
-
-// EnumValue takes in an Enumeration and returns a driver.Valuer which
-// serializes the enum into a string and additionally checks if the enum is
-// valid.
-func EnumValue(value Enumeration) driver.Valuer {
-	return &enumValue{value: value}
-}
-
-// Value implements the driver.Valuer interface.
-func (v *enumValue) Value() (driver.Value, error) {
-	val := reflect.ValueOf(v.value)
-	names := v.value.Enumerate()
-	switch val.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := int(val.Int())
-		if i < 0 || i >= len(names) {
-			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
-		}
-		name := names[i]
-		if name == "" && i != 0 {
-			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
-		}
-		return name, nil
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		i := int(val.Uint())
-		if i < 0 || i >= len(names) {
-			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
-		}
-		name := names[i]
-		if name == "" && i != 0 {
-			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
-		}
-		return name, nil
-	case reflect.String:
-		typ := val.Type()
-		name := val.String()
-		if getEnumIndex(name, names, typ) < 0 {
-			return nil, fmt.Errorf("%q is not a valid %T", name, v.value)
-		}
-		return name, nil
-	default:
-		return nil, fmt.Errorf("underlying type of %[1]v is neither an integer nor string (%[1]T)", v.value)
-	}
-}
-
-var (
-	enumIndexMu sync.RWMutex
-	enumIndex   = make(map[reflect.Type]map[string]int)
-)
-
-// getEnumIndex returns the index of the enum within the names slice.
-func getEnumIndex(name string, names []string, typ reflect.Type) int {
-	if len(names) <= 4 {
-		for idx := range names {
-			if names[idx] == name {
-				return idx
-			}
-		}
-		return -1
-	}
-	var nameIndex map[string]int
-	enumIndexMu.RLock()
-	nameIndex = enumIndex[typ]
-	enumIndexMu.RUnlock()
-	if nameIndex != nil {
-		idx, ok := nameIndex[name]
-		if !ok {
-			return -1
-		}
-		return idx
-	}
-	idx := -1
-	nameIndex = make(map[string]int)
-	for i := range names {
-		if names[i] == name {
-			idx = i
-		}
-		nameIndex[names[i]] = i
-	}
-	enumIndexMu.Lock()
-	enumIndex[typ] = nameIndex
-	enumIndexMu.Unlock()
-	return idx
-}
+func (field EnumField) IsEnum() {}
 
 // JSONField represents an SQL JSON field.
 type JSONField struct {
@@ -683,68 +593,68 @@ func NewJSONField(name string, tbl TableStruct) JSONField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f JSONField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
+func (field JSONField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
 	return nil
 }
 
 // As returns a new JSONField with the given alias.
-func (f JSONField) As(alias string) JSONField {
-	f.alias = alias
-	return f
+func (field JSONField) As(alias string) JSONField {
+	field.alias = alias
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f JSONField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field JSONField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f JSONField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field JSONField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f JSONField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field JSONField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f JSONField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field JSONField) Set(value any) Assignment {
+	switch value.(type) {
+	case []byte, driver.Valuer, SQLWriter:
+		return Set(field, value)
+	}
+	switch reflect.TypeOf(value).Kind() {
+	case reflect.Map, reflect.Struct, reflect.Slice, reflect.Array:
+		return Set(field, JSONValue(value))
+	}
+	return Set(field, value)
+}
+
+// SetJSON returns an Assignment assigning the value to the field. It wraps the
+// value in JSONValue().
+func (field JSONField) SetJSON(value any) Assignment {
+	return Set(field, JSONValue(value))
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f JSONField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field JSONField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
-
-// SetJSON is like Set but it wraps val with JSONValue().
-func (f JSONField) SetJSON(val any) Assignment { return Set(f, JSONValue(val)) }
 
 // GetAlias returns the alias of the JSONField.
-func (f JSONField) GetAlias() string { return f.alias }
+func (field JSONField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f JSONField) IsField() {}
+func (field JSONField) IsField() {}
 
 // IsBinary implements the Binary interface.
-func (f JSONField) IsBinary() {}
+func (field JSONField) IsBinary() {}
 
 // IsJSON implements the JSON interface.
-func (f JSONField) IsJSON() {}
+func (field JSONField) IsJSON() {}
 
 // IsString implements the String interface.
-func (f JSONField) IsString() {}
-
-type jsonValue struct{ value any }
-
-// JSONValue takes in an interface{} and returns a driver.Valuer which runs the
-// value through json.Marshal before submitting it to the database.
-func JSONValue(value any) driver.Valuer { return &jsonValue{value: value} }
-
-// Value implements the driver.Valuer interface.
-func (v *jsonValue) Value() (driver.Value, error) {
-	var b strings.Builder
-	err := json.NewEncoder(&b).Encode(v.value)
-	return b.String(), err
-}
+func (field JSONField) IsString() {}
 
 // NumberField represents an SQL number field.
 type NumberField struct {
@@ -767,163 +677,170 @@ func NewNumberField(name string, tbl TableStruct) NumberField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f NumberField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field NumberField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new NumberField with the given alias.
-func (f NumberField) As(alias string) NumberField {
-	f.alias = alias
-	return f
+func (field NumberField) As(alias string) NumberField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new NumberField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f NumberField) Asc() NumberField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field NumberField) Asc() NumberField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new NumberField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field DESC'.
-func (f NumberField) Desc() NumberField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field NumberField) Desc() NumberField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new NumberField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f NumberField) NullsLast() NumberField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field NumberField) NullsLast() NumberField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new NumberField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f NumberField) NullsFirst() NumberField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field NumberField) NullsFirst() NumberField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f NumberField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field NumberField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f NumberField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field NumberField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f NumberField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field NumberField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f NumberField) In(val any) Predicate { return In(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field NumberField) In(value any) Predicate { return In(field, value) }
 
-// Eq returns a 'field = val' Predicate.
-func (f NumberField) Eq(val Number) Predicate { return Eq(f, val) }
+// NotIn returns a 'field NOT IN (value)' Predicate. The value can be a slice,
+// which corresponds to the expression 'field IN (x, y, z)'.
+func (field NumberField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// Ne returns a 'field <> val' Predicate.
-func (f NumberField) Ne(val Number) Predicate { return Ne(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field NumberField) Eq(value Number) Predicate { return Eq(field, value) }
 
-// Lt returns a 'field < val' Predicate.
-func (f NumberField) Lt(val Number) Predicate { return Lt(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field NumberField) Ne(value Number) Predicate { return Ne(field, value) }
 
-// Le returns a 'field <= val' Predicate.
-func (f NumberField) Le(val Number) Predicate { return Le(f, val) }
+// Lt returns a 'field < value' Predicate.
+func (field NumberField) Lt(value Number) Predicate { return Lt(field, value) }
 
-// Gt returns a 'field > val' Predicate.
-func (f NumberField) Gt(val Number) Predicate { return Gt(f, val) }
+// Le returns a 'field <= value' Predicate.
+func (field NumberField) Le(value Number) Predicate { return Le(field, value) }
 
-// Ge returns a 'field >= val' Predicate.
-func (f NumberField) Ge(val Number) Predicate { return Ge(f, val) }
+// Gt returns a 'field > value' Predicate.
+func (field NumberField) Gt(value Number) Predicate { return Gt(field, value) }
+
+// Ge returns a 'field >= value' Predicate.
+func (field NumberField) Ge(value Number) Predicate { return Ge(field, value) }
 
 // EqInt returns a 'field = num' Predicate.
-func (f NumberField) EqInt(num int) Predicate { return Eq(f, num) }
+func (field NumberField) EqInt(num int) Predicate { return Eq(field, num) }
 
 // NeInt returns a 'field <> num' Predicate.
-func (f NumberField) NeInt(num int) Predicate { return Ne(f, num) }
+func (field NumberField) NeInt(num int) Predicate { return Ne(field, num) }
 
 // LtInt returns a 'field < num' Predicate.
-func (f NumberField) LtInt(num int) Predicate { return Lt(f, num) }
+func (field NumberField) LtInt(num int) Predicate { return Lt(field, num) }
 
 // LeInt returns a 'field <= num' Predicate.
-func (f NumberField) LeInt(num int) Predicate { return Le(f, num) }
+func (field NumberField) LeInt(num int) Predicate { return Le(field, num) }
 
 // GtInt returns a 'field > num' Predicate.
-func (f NumberField) GtInt(num int) Predicate { return Gt(f, num) }
+func (field NumberField) GtInt(num int) Predicate { return Gt(field, num) }
 
 // GeInt returns a 'field >= num' Predicate.
-func (f NumberField) GeInt(num int) Predicate { return Ge(f, num) }
+func (field NumberField) GeInt(num int) Predicate { return Ge(field, num) }
 
 // EqInt64 returns a 'field = num' Predicate.
-func (f NumberField) EqInt64(num int64) Predicate { return Eq(f, num) }
+func (field NumberField) EqInt64(num int64) Predicate { return Eq(field, num) }
 
 // NeInt64 returns a 'field <> num' Predicate.
-func (f NumberField) NeInt64(num int64) Predicate { return Ne(f, num) }
+func (field NumberField) NeInt64(num int64) Predicate { return Ne(field, num) }
 
 // LtInt64 returns a 'field < num' Predicate.
-func (f NumberField) LtInt64(num int64) Predicate { return Lt(f, num) }
+func (field NumberField) LtInt64(num int64) Predicate { return Lt(field, num) }
 
 // LeInt64 returns a 'field <= num' Predicate.
-func (f NumberField) LeInt64(num int64) Predicate { return Le(f, num) }
+func (field NumberField) LeInt64(num int64) Predicate { return Le(field, num) }
 
 // GtInt64 returns a 'field > num' Predicate.
-func (f NumberField) GtInt64(num int64) Predicate { return Gt(f, num) }
+func (field NumberField) GtInt64(num int64) Predicate { return Gt(field, num) }
 
 // GeInt64 returns a 'field >= num' Predicate.
-func (f NumberField) GeInt64(num int64) Predicate { return Ge(f, num) }
+func (field NumberField) GeInt64(num int64) Predicate { return Ge(field, num) }
 
 // EqFloat64 returns a 'field = num' Predicate.
-func (f NumberField) EqFloat64(num float64) Predicate { return Eq(f, num) }
+func (field NumberField) EqFloat64(num float64) Predicate { return Eq(field, num) }
 
 // NeFloat64 returns a 'field <> num' Predicate.
-func (f NumberField) NeFloat64(num float64) Predicate { return Ne(f, num) }
+func (field NumberField) NeFloat64(num float64) Predicate { return Ne(field, num) }
 
 // LtFloat64 returns a 'field < num' Predicate.
-func (f NumberField) LtFloat64(num float64) Predicate { return Lt(f, num) }
+func (field NumberField) LtFloat64(num float64) Predicate { return Lt(field, num) }
 
 // LeFloat64 returns a 'field <= num' Predicate.
-func (f NumberField) LeFloat64(num float64) Predicate { return Le(f, num) }
+func (field NumberField) LeFloat64(num float64) Predicate { return Le(field, num) }
 
 // GtFloat64 returns a 'field > num' Predicate.
-func (f NumberField) GtFloat64(num float64) Predicate { return Gt(f, num) }
+func (field NumberField) GtFloat64(num float64) Predicate { return Gt(field, num) }
 
 // GeFloat64 returns a 'field >= num' Predicate.
-func (f NumberField) GeFloat64(num float64) Predicate { return Ge(f, num) }
+func (field NumberField) GeFloat64(num float64) Predicate { return Ge(field, num) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f NumberField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field NumberField) Set(value any) Assignment {
+	return Set(field, value)
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f NumberField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field NumberField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // SetBytes returns an Assignment assigning an int to the field.
-func (f NumberField) SetInt(num int) Assignment { return Set(f, num) }
+func (field NumberField) SetInt(num int) Assignment { return Set(field, num) }
 
 // SetBytes returns an Assignment assigning an int64 to the field.
-func (f NumberField) SetInt64(num int64) Assignment { return Set(f, num) }
+func (field NumberField) SetInt64(num int64) Assignment { return Set(field, num) }
 
 // SetBytes returns an Assignment assigning an float64 to the field.
-func (f NumberField) SetFloat64(num float64) Assignment { return Set(f, num) }
+func (field NumberField) SetFloat64(num float64) Assignment { return Set(field, num) }
 
 // GetAlias returns the alias of the NumberField.
-func (f NumberField) GetAlias() string { return f.alias }
+func (field NumberField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f NumberField) IsField() {}
+func (field NumberField) IsField() {}
 
 // IsNumber implements the Number interface.
-func (f NumberField) IsNumber() {}
+func (field NumberField) IsNumber() {}
 
 // StringField represents an SQL string field.
 type StringField struct {
@@ -947,141 +864,162 @@ func NewStringField(name string, tbl TableStruct) StringField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f StringField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	if f.collation != "" {
+func (field StringField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	if field.collation != "" {
 		buf.WriteString(" COLLATE ")
 		if dialect == DialectPostgres {
-			buf.WriteString(`"` + EscapeQuote(f.collation, '"') + `"`)
+			buf.WriteString(`"` + EscapeQuote(field.collation, '"') + `"`)
 		} else {
-			buf.WriteString(QuoteIdentifier(dialect, f.collation))
+			buf.WriteString(QuoteIdentifier(dialect, field.collation))
 		}
 	}
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new StringField with the given alias.
-func (f StringField) As(alias string) StringField {
-	f.alias = alias
-	return f
+func (field StringField) As(alias string) StringField {
+	field.alias = alias
+	return field
 }
 
 // Collate returns a new StringField using the given collation.
-func (f StringField) Collate(collation string) StringField {
-	f.collation = collation
-	return f
+func (field StringField) Collate(collation string) StringField {
+	field.collation = collation
+	return field
 }
 
 // Asc returns a new StringField indicating that it should be ordered in
 // ascending order i.e. 'ORDER BY field ASC'.
-func (f StringField) Asc() StringField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field StringField) Asc() StringField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new StringField indicating that it should be ordered in
 // descending order i.e. 'ORDER BY field DESC'.
-func (f StringField) Desc() StringField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field StringField) Desc() StringField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new StringField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f StringField) NullsLast() StringField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field StringField) NullsLast() StringField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new StringField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f StringField) NullsFirst() StringField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field StringField) NullsFirst() StringField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f StringField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field StringField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f StringField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field StringField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f StringField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field StringField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f StringField) In(val any) Predicate { return In(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field StringField) In(value any) Predicate { return In(field, value) }
 
-// Eq returns a 'field = val' Predicate.
-func (f StringField) Eq(val String) Predicate { return Eq(f, val) }
+// In returns a 'field NOT IN (value)' Predicate. The value can be a slice,
+// which corresponds to the expression 'field NOT IN (x, y, z)'.
+func (field StringField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// Ne returns a 'field <> val' Predicate.
-func (f StringField) Ne(val String) Predicate { return Ne(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field StringField) Eq(value String) Predicate { return Eq(field, value) }
 
-// Lt returns a 'field < val' Predicate.
-func (f StringField) Lt(val String) Predicate { return Lt(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field StringField) Ne(value String) Predicate { return Ne(field, value) }
 
-// Le returns a 'field <= val' Predicate.
-func (f StringField) Le(val String) Predicate { return Le(f, val) }
+// Lt returns a 'field < value' Predicate.
+func (field StringField) Lt(value String) Predicate { return Lt(field, value) }
 
-// Gt returns a 'field > val' Predicate.
-func (f StringField) Gt(val String) Predicate { return Gt(f, val) }
+// Le returns a 'field <= value' Predicate.
+func (field StringField) Le(value String) Predicate { return Le(field, value) }
 
-// Ge returns a 'field >= val' Predicate.
-func (f StringField) Ge(val String) Predicate { return Ge(f, val) }
+// Gt returns a 'field > value' Predicate.
+func (field StringField) Gt(value String) Predicate { return Gt(field, value) }
 
-// EqString returns a 'field = s' Predicate.
-func (f StringField) EqString(s string) Predicate { return Eq(f, s) }
+// Ge returns a 'field >= value' Predicate.
+func (field StringField) Ge(value String) Predicate { return Ge(field, value) }
 
-// NeString returns a 'field <> s' Predicate.
-func (f StringField) NeString(s string) Predicate { return Ne(f, s) }
+// EqString returns a 'field = str' Predicate.
+func (field StringField) EqString(str string) Predicate { return Eq(field, str) }
 
-// LtString returns a 'field < s' Predicate.
-func (f StringField) LtString(s string) Predicate { return Lt(f, s) }
+// NeString returns a 'field <> str' Predicate.
+func (field StringField) NeString(str string) Predicate { return Ne(field, str) }
 
-// LeString returns a 'field <= s' Predicate.
-func (f StringField) LeString(s string) Predicate { return Le(f, s) }
+// LtString returns a 'field < str' Predicate.
+func (field StringField) LtString(str string) Predicate { return Lt(field, str) }
 
-// GtString returns a 'field > s' Predicate.
-func (f StringField) GtString(s string) Predicate { return Gt(f, s) }
+// LeString returns a 'field <= str' Predicate.
+func (field StringField) LeString(str string) Predicate { return Le(field, str) }
 
-// GeString returns a 'field >= s' Predicate.
-func (f StringField) GeString(s string) Predicate { return Ge(f, s) }
+// GtString returns a 'field > str' Predicate.
+func (field StringField) GtString(str string) Predicate { return Gt(field, str) }
 
-// LikeString returns a 'field LIKE s' Predicate.
-func (f StringField) LikeString(s string) Predicate { return Expr("{} LIKE {}", f, s) }
+// GeString returns a 'field >= str' Predicate.
+func (field StringField) GeString(str string) Predicate { return Ge(field, str) }
 
-// LikeString returns a 'field ILIKE s' Predicate.
-func (f StringField) ILikeString(s string) Predicate { return Expr("{} ILIKE {}", f, s) }
-
-// Set returns an Assignment assigning the val to the field.
-func (f StringField) Set(val any) Assignment { return Set(f, val) }
-
-// Setf returns an Assignment assigning an expression to the field.
-func (f StringField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+// LikeString returns a 'field LIKE str' Predicate.
+func (field StringField) LikeString(str string) Predicate {
+	return Expr("{} LIKE {}", field, str)
 }
 
-// SetBytes returns an Assignment assigning a string to the field.
-func (f StringField) SetString(s string) Assignment { return Set(f, s) }
+// NotLikeString returns a 'field NOT LIKE str' Predicate.
+func (field StringField) NotLikeString(str string) Predicate {
+	return Expr("{} NOT LIKE {}", field, str)
+}
+
+// ILikeString returns a 'field ILIKE str' Predicate.
+func (field StringField) ILikeString(str string) Predicate {
+	return Expr("{} ILIKE {}", field, str)
+}
+
+// NotILikeString returns a 'field NOT ILIKE str' Predicate.
+func (field StringField) NotILikeString(str string) Predicate {
+	return Expr("{} NOT ILIKE {}", field, str)
+}
+
+// Set returns an Assignment assigning the value to the field.
+func (field StringField) Set(value any) Assignment {
+	return Set(field, value)
+}
+
+// Setf returns an Assignment assigning an expression to the field.
+func (field StringField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
+}
+
+// SetString returns an Assignment assigning a string to the field.
+func (field StringField) SetString(str string) Assignment { return Set(field, str) }
 
 // GetAlias returns the alias of the StringField.
-func (f StringField) GetAlias() string { return f.alias }
+func (field StringField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f StringField) IsField() {}
+func (field StringField) IsField() {}
 
 // IsString implements the String interface.
-func (f StringField) IsString() {}
+func (field StringField) IsString() {}
 
 // TimeField represents an SQL time field.
 type TimeField struct {
@@ -1104,128 +1042,153 @@ func NewTimeField(name string, tbl TableStruct) TimeField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f TimeField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field TimeField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new TimeField with the given alias.
-func (f TimeField) As(alias string) TimeField {
-	f.alias = alias
-	return f
+func (field TimeField) As(alias string) TimeField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new TimeField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f TimeField) Asc() TimeField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field TimeField) Asc() TimeField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new TimeField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field DESC'.
-func (f TimeField) Desc() TimeField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field TimeField) Desc() TimeField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new TimeField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f TimeField) NullsLast() TimeField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field TimeField) NullsLast() TimeField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new TimeField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f TimeField) NullsFirst() TimeField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field TimeField) NullsFirst() TimeField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f TimeField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field TimeField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f TimeField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field TimeField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f TimeField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field TimeField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f TimeField) In(val any) Predicate { return In(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field TimeField) In(value any) Predicate { return In(field, value) }
 
-// Eq returns a 'field = val' Predicate.
-func (f TimeField) Eq(val Time) Predicate { return Eq(f, val) }
+// NotIn returns a 'field NOT IN (value)' Predicate. The value can be a slice,
+// which corresponds to the expression 'field NOT IN (x, y, z)'.
+func (field TimeField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// Ne returns a 'field <> val' Predicate.
-func (f TimeField) Ne(val Time) Predicate { return Ne(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field TimeField) Eq(value Time) Predicate { return Eq(field, value) }
 
-// Lt returns a 'field < val' Predicate.
-func (f TimeField) Lt(val Time) Predicate { return Lt(f, val) }
+// Ne returns a 'field <> value' Predicate.
+func (field TimeField) Ne(value Time) Predicate { return Ne(field, value) }
 
-// Le returns a 'field <= val' Predicate.
-func (f TimeField) Le(val Time) Predicate { return Le(f, val) }
+// Lt returns a 'field < value' Predicate.
+func (field TimeField) Lt(value Time) Predicate { return Lt(field, value) }
 
-// Gt returns a 'field > val' Predicate.
-func (f TimeField) Gt(val Time) Predicate { return Gt(f, val) }
+// Le returns a 'field <= value' Predicate.
+func (field TimeField) Le(value Time) Predicate { return Le(field, value) }
 
-// Ge returns a 'field >= val' Predicate.
-func (f TimeField) Ge(val Time) Predicate { return Ge(f, val) }
+// Gt returns a 'field > value' Predicate.
+func (field TimeField) Gt(value Time) Predicate { return Gt(field, value) }
+
+// Ge returns a 'field >= value' Predicate.
+func (field TimeField) Ge(value Time) Predicate { return Ge(field, value) }
 
 // EqTime returns a 'field = t' Predicate.
-func (f TimeField) EqTime(t time.Time) Predicate { return Eq(f, t) }
+func (field TimeField) EqTime(t time.Time) Predicate { return Eq(field, t) }
 
 // NeTime returns a 'field <> t' Predicate.
-func (f TimeField) NeTime(t time.Time) Predicate { return Ne(f, t) }
+func (field TimeField) NeTime(t time.Time) Predicate { return Ne(field, t) }
 
 // LtTime returns a 'field < t' Predicate.
-func (f TimeField) LtTime(t time.Time) Predicate { return Lt(f, t) }
+func (field TimeField) LtTime(t time.Time) Predicate { return Lt(field, t) }
 
 // LeTime returns a 'field <= t' Predicate.
-func (f TimeField) LeTime(t time.Time) Predicate { return Le(f, t) }
+func (field TimeField) LeTime(t time.Time) Predicate { return Le(field, t) }
 
 // GtTime returns a 'field > t' Predicate.
-func (f TimeField) GtTime(t time.Time) Predicate { return Gt(f, t) }
+func (field TimeField) GtTime(t time.Time) Predicate { return Gt(field, t) }
 
 // GeTime returns a 'field >= t' Predicate.
-func (f TimeField) GeTime(t time.Time) Predicate { return Ge(f, t) }
+func (field TimeField) GeTime(t time.Time) Predicate { return Ge(field, t) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f TimeField) Set(val any) Assignment { return Set(f, val) }
+// Set returns an Assignment assigning the value to the field.
+func (field TimeField) Set(value any) Assignment {
+	return Set(field, value)
+}
 
 // Setf returns an Assignment assigning an expression to the field.
-func (f TimeField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+func (field TimeField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
 }
 
 // SetTime returns an Assignment assigning a time.Time to the field.
-func (f TimeField) SetTime(t time.Time) Assignment { return Set(f, t) }
+func (field TimeField) SetTime(t time.Time) Assignment { return Set(field, t) }
 
 // SetTimestamp returns an Assignment assigning a Timestamp to the field.
-func (f TimeField) SetTimestamp(t Timestamp) Assignment { return Set(f, t) }
+func (field TimeField) SetTimestamp(t Timestamp) Assignment { return Set(field, t) }
 
 // GetAlias returns the alias of the TimeField.
-func (f TimeField) GetAlias() string { return f.alias }
+func (field TimeField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f TimeField) IsField() {}
+func (field TimeField) IsField() {}
 
 // IsTime implements the Time interface.
-func (f TimeField) IsTime() {}
+func (field TimeField) IsTime() {}
 
-// Timestamp is like sql.NullTime but implements the DialectValuer interface.
-// When the dialect is SQLite, Timestamp will render itself an an int64 unix
-// time. Otherwise, it behaves similarly to an sql.NullTime.
+// Timestamp is as a replacement for sql.NullTime but with the following
+// enhancements:
+//
+// 1. Timestamp.Value() returns an int64 unix timestamp if the dialect is
+// SQLite, otherwise it returns a time.Time (similar to sql.NullTime).
+//
+// 2. Timestamp.Scan() additionally supports scanning from int64 and text
+// (string/[]byte) values on top of what sql.NullTime already supports. The
+// following text timestamp formats are supported:
+//
+//	var timestampFormats = []string{
+//		"2006-01-02 15:04:05.999999999-07:00",
+//		"2006-01-02T15:04:05.999999999-07:00",
+//		"2006-01-02 15:04:05.999999999",
+//		"2006-01-02T15:04:05.999999999",
+//		"2006-01-02 15:04:05",
+//		"2006-01-02T15:04:05",
+//		"2006-01-02 15:04",
+//		"2006-01-02T15:04",
+//		"2006-01-02",
+//	}
 type Timestamp struct {
 	time.Time
 	Valid   bool
@@ -1238,7 +1201,7 @@ func NewTimestamp(t time.Time) Timestamp {
 }
 
 // copied from https://pkg.go.dev/github.com/mattn/go-sqlite3#pkg-variables
-var sqliteTimestampFormats = []string{
+var timestampFormats = []string{
 	"2006-01-02 15:04:05.999999999-07:00",
 	"2006-01-02T15:04:05.999999999-07:00",
 	"2006-01-02 15:04:05.999999999",
@@ -1250,7 +1213,21 @@ var sqliteTimestampFormats = []string{
 	"2006-01-02",
 }
 
-// Scan implements the sql.Scanner interface.
+// Scan implements the sql.Scanner interface. It additionally supports scanning
+// from int64 and text (string/[]byte) values on top of what sql.NullTime
+// already supports. The following text timestamp formats are supported:
+//
+//	var timestampFormats = []string{
+//		"2006-01-02 15:04:05.999999999-07:00",
+//		"2006-01-02T15:04:05.999999999-07:00",
+//		"2006-01-02 15:04:05.999999999",
+//		"2006-01-02T15:04:05.999999999",
+//		"2006-01-02 15:04:05",
+//		"2006-01-02T15:04:05",
+//		"2006-01-02 15:04",
+//		"2006-01-02T15:04",
+//		"2006-01-02",
+//	}
 func (ts *Timestamp) Scan(value any) error {
 	if value == nil {
 		ts.Time, ts.Valid = time.Time{}, false
@@ -1278,7 +1255,7 @@ func (ts *Timestamp) Scan(value any) error {
 		var err error
 		var timeVal time.Time
 		value = strings.TrimSuffix(value, "Z")
-		for _, format := range sqliteTimestampFormats {
+		for _, format := range timestampFormats {
 			if timeVal, err = time.ParseInLocation(format, value, time.UTC); err == nil {
 				ts.Time, ts.Valid = timeVal, true
 				return nil
@@ -1293,7 +1270,7 @@ func (ts *Timestamp) Scan(value any) error {
 		var err error
 		var timeVal time.Time
 		value = bytes.TrimSuffix(value, []byte("Z"))
-		for _, format := range sqliteTimestampFormats {
+		for _, format := range timestampFormats {
 			if timeVal, err = time.ParseInLocation(format, string(value), time.UTC); err == nil {
 				ts.Time, ts.Valid = timeVal, true
 				return nil
@@ -1311,7 +1288,9 @@ func (ts *Timestamp) Scan(value any) error {
 	}
 }
 
-// Value implements the driver.Valuer interface.
+// Value implements the driver.Valuer interface. It returns an int64 unix
+// timestamp if the dialect is SQLite, otherwise it returns a time.Time
+// (similar to sql.NullTime).
 func (ts Timestamp) Value() (driver.Value, error) {
 	if !ts.Valid {
 		return nil, nil
@@ -1349,133 +1328,109 @@ func NewUUIDField(name string, tbl TableStruct) UUIDField {
 }
 
 // WriteSQL implements the SQLWriter interface.
-func (f UUIDField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
-	writeFieldIdentifier(ctx, dialect, buf, args, params, f.table, f.name)
-	writeFieldOrder(ctx, dialect, buf, args, params, f.desc, f.nullsfirst)
+func (field UUIDField) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	writeFieldIdentifier(ctx, dialect, buf, args, params, field.table, field.name)
+	writeFieldOrder(ctx, dialect, buf, args, params, field.desc, field.nullsfirst)
 	return nil
 }
 
 // As returns a new UUIDField with the given alias.
-func (f UUIDField) As(alias string) UUIDField {
-	f.alias = alias
-	return f
+func (field UUIDField) As(alias string) UUIDField {
+	field.alias = alias
+	return field
 }
 
 // Asc returns a new UUIDField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field ASC'.
-func (f UUIDField) Asc() UUIDField {
-	f.desc.Valid = true
-	f.desc.Bool = false
-	return f
+func (field UUIDField) Asc() UUIDField {
+	field.desc.Valid = true
+	field.desc.Bool = false
+	return field
 }
 
 // Desc returns a new UUIDField indicating that it should be ordered in ascending
 // order i.e. 'ORDER BY field DESC'.
-func (f UUIDField) Desc() UUIDField {
-	f.desc.Valid = true
-	f.desc.Bool = true
-	return f
+func (field UUIDField) Desc() UUIDField {
+	field.desc.Valid = true
+	field.desc.Bool = true
+	return field
 }
 
 // NullsLast returns a new UUIDField indicating that it should be ordered
 // with nulls last i.e. 'ORDER BY field NULLS LAST'.
-func (f UUIDField) NullsLast() UUIDField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = false
-	return f
+func (field UUIDField) NullsLast() UUIDField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = false
+	return field
 }
 
 // NullsFirst returns a new UUIDField indicating that it should be ordered
 // with nulls first i.e. 'ORDER BY field NULLS FIRST'.
-func (f UUIDField) NullsFirst() UUIDField {
-	f.nullsfirst.Valid = true
-	f.nullsfirst.Bool = true
-	return f
+func (field UUIDField) NullsFirst() UUIDField {
+	field.nullsfirst.Valid = true
+	field.nullsfirst.Bool = true
+	return field
 }
 
 // WithPrefix returns a new Field that with the given prefix.
-func (f UUIDField) WithPrefix(prefix string) Field {
-	f.table.alias = ""
-	f.table.name = prefix
-	return f
+func (field UUIDField) WithPrefix(prefix string) Field {
+	field.table.alias = ""
+	field.table.name = prefix
+	return field
 }
 
 // IsNull returns a 'field IS NULL' Predicate.
-func (f UUIDField) IsNull() Predicate { return Expr("{} IS NULL", f) }
+func (field UUIDField) IsNull() Predicate { return Expr("{} IS NULL", field) }
 
 // IsNotNull returns a 'field IS NOT NULL' Predicate.
-func (f UUIDField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", f) }
+func (field UUIDField) IsNotNull() Predicate { return Expr("{} IS NOT NULL", field) }
 
-// In returns a 'field IN (val)' Predicate.
-func (f UUIDField) In(val any) Predicate { return In(f, val) }
+// In returns a 'field IN (value)' Predicate. The value can be a slice, which
+// corresponds to the expression 'field IN (x, y, z)'.
+func (field UUIDField) In(value any) Predicate { return In(field, value) }
 
-// Eq returns a 'field = val' Predicate. The value is passed as-is to the
-// database.
-func (f UUIDField) Eq(val any) Predicate { return Eq(f, val) }
+// NotIn returns a 'field NOT IN (value)' Predicate. The value can be a slice,
+// which corresponds to the expression 'field NOT IN (x, y, z)'.
+func (field UUIDField) NotIn(value any) Predicate { return NotIn(field, value) }
 
-// Ne returns a 'field <> val' Predicate. The value is passed as-is to the
-// database.
-func (f UUIDField) Ne(val any) Predicate { return Ne(f, val) }
+// Eq returns a 'field = value' Predicate.
+func (field UUIDField) Eq(value any) Predicate { return Eq(field, value) }
 
-// EqUUID is like Eq but it wraps val in UUIDValue().
-func (f UUIDField) EqUUID(val any) Predicate { return Eq(f, UUIDValue(val)) }
+// Ne returns a 'field <> value' Predicate.
+func (field UUIDField) Ne(value any) Predicate { return Ne(field, value) }
 
-// NeUUID is like Ne but it wraps val in UUIDValue().
-func (f UUIDField) NeUUID(val any) Predicate { return Ne(f, UUIDValue(val)) }
+// EqUUID returns a 'field = value' Predicate. The value is wrapped in
+// UUIDValue().
+func (field UUIDField) EqUUID(value any) Predicate { return Eq(field, UUIDValue(value)) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f UUIDField) Set(val any) Assignment { return Set(f, val) }
+// NeUUID returns a 'field <> value' Predicate. The value is wrapped in
+// UUIDValue().
+func (field UUIDField) NeUUID(value any) Predicate { return Ne(field, UUIDValue(value)) }
 
-// Set returns an Assignment assigning the val to the field.
-func (f UUIDField) Setf(format string, values ...any) Assignment {
-	return Setf(f, format, values...)
+// Set returns an Assignment assigning the value to the field.
+func (field UUIDField) Set(value any) Assignment {
+	return Set(field, value)
 }
 
-// SetUUID is like Set but it wraps val with the UUIDValue() constructor.
-func (f UUIDField) SetUUID(val any) Assignment { return Set(f, UUIDValue(val)) }
+// SetUUID returns an Assignment assigning the value to the field. It wraps the
+// value in UUIDValue().
+func (field UUIDField) SetUUID(value any) Assignment {
+	return Set(field, UUIDValue(value))
+}
+
+// Set returns an Assignment assigning the value to the field.
+func (field UUIDField) Setf(format string, values ...any) Assignment {
+	return Setf(field, format, values...)
+}
 
 // GetAlias returns the alias of the UUIDField.
-func (f UUIDField) GetAlias() string { return f.alias }
+func (field UUIDField) GetAlias() string { return field.alias }
 
 // IsField implements the Field interface.
-func (f UUIDField) IsField() {}
+func (field UUIDField) IsField() {}
 
 // IsUUID implements the UUID interface.
-func (f UUIDField) IsUUID() {}
-
-type uuidValue struct {
-	dialect string
-	value   any
-}
-
-// UUIDValue takes in a type whose underlying type must be a [16]byte and
-// returns a driver.Valuer.
-func UUIDValue(value any) driver.Valuer { return &uuidValue{value: value} }
-
-// Value implements the driver.Valuer interface.
-func (v *uuidValue) Value() (driver.Value, error) {
-	val := reflect.ValueOf(v.value)
-	typ := val.Type()
-	if val.Kind() != reflect.Array || val.Len() != 16 || typ.Elem().Kind() != reflect.Uint8 {
-		return nil, fmt.Errorf("%[1]v %[1]T is not [16]byte", v.value)
-	}
-	var uuid [16]byte
-	for i := 0; i < val.Len(); i++ {
-		uuid[i] = val.Index(i).Interface().(byte)
-	}
-	if v.dialect != DialectPostgres {
-		return uuid[:], nil
-	}
-	var buf [36]byte
-	googleuuid.EncodeHex(buf[:], uuid)
-	return string(buf[:]), nil
-}
-
-// DialectValuer implements the DialectValuer interface.
-func (v *uuidValue) DialectValuer(dialect string) (driver.Valuer, error) {
-	v.dialect = dialect
-	return v, nil
-}
+func (field UUIDField) IsUUID() {}
 
 // New instantiates a new table struct with the given alias. Passing in an
 // empty string is equivalent to giving no alias to the table.
@@ -1502,13 +1457,10 @@ func New[T Table](alias string) T {
 	if !firstfield.CanSet() {
 		return tbl
 	}
-	var tableSchema, tableName string
 	tag := firstfieldType.Tag.Get("sq")
-	if i := strings.IndexByte(tag, '.'); i >= 0 {
-		tableSchema = tag[:i]
-		tableName = tag[i+1:]
-	} else {
-		tableName = tag
+	tableSchema, tableName, ok := strings.Cut(tag, ".")
+	if !ok {
+		tableSchema, tableName = "", tableSchema
 	}
 	if tableName == "" {
 		tableName = strings.ToLower(typ.Name())

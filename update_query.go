@@ -38,7 +38,7 @@ func (q UpdateQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 			dialect:  q.Dialect,
 			isUpdate: true,
 		}
-		defer recoverPanic(&err)
+		defer mapperFunctionPanicked(&err)
 		q.ColumnMapper(col)
 		if err != nil {
 			return err

@@ -12,11 +12,11 @@ import (
 )
 
 func Diff[T any](got, want T) string {
-	opts := cmp.Options{
+	diff := cmp.Diff(
+		got, want,
 		cmp.Exporter(func(typ reflect.Type) bool { return true }),
 		cmpopts.EquateEmpty(),
-	}
-	diff := cmp.Diff(got, want, opts...)
+	)
 	if diff != "" {
 		return "\n-got +want\n" + diff
 	}

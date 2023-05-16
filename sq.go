@@ -5,8 +5,15 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
+	"reflect"
+	"runtime"
+	"strings"
 	"sync"
+
+	"github.com/bokwoon95/sq/internal/googleuuid"
+	"github.com/bokwoon95/sq/internal/pqarray"
 )
 
 var bufpool = &sync.Pool{
@@ -294,13 +301,246 @@ func writeFields(ctx context.Context, dialect string, buf *bytes.Buffer, args *[
 	return nil
 }
 
-func recoverPanic(err *error) {
+// mapperFunctionPanicked recovers from any panics *except* for runtime error
+// panics. Runtime error panics like out-of-bounds index accesses or failed
+// type assertions are not normal so we don't want to swallow the stack trace
+// by recovering from it.
+//
+// The function is called as such so that it shows up as
+// "sq.mapperFunctionPanicked" in panic stack trace, giving the user a
+// descriptive clue of what went wrong (i.e. their mapper function panicked).
+func mapperFunctionPanicked(err *error) {
 	if r := recover(); r != nil {
 		switch r := r.(type) {
 		case error:
+			if runtimeErr, ok := r.(runtime.Error); ok {
+				panic(runtimeErr)
+			}
 			*err = r
 		default:
-			*err = fmt.Errorf("rowmapper panic: %v", r)
+			*err = fmt.Errorf(fmt.Sprint(r))
 		}
 	}
+}
+
+// ArrayValue takes in a []string, []int, []int64, []int32, []float64,
+// []float32 or []bool and returns a driver.Valuer for that type. For Postgres,
+// it serializes into a Postgres array. Otherwise, it serializes into a JSON
+// array.
+func ArrayValue(value any) driver.Valuer {
+	return &arrayValue{value: value}
+}
+
+type arrayValue struct {
+	dialect string
+	value   any
+}
+
+// Value implements the driver.Valuer interface.
+func (v *arrayValue) Value() (driver.Value, error) {
+	switch v.value.(type) {
+	case []string, []int, []int64, []int32, []float64, []float32, []bool:
+		break
+	default:
+		return nil, fmt.Errorf("value %#v is not a []string, []int, []int32, []float64, []float32 or []bool", v.value)
+	}
+	if v.dialect != DialectPostgres {
+		var b strings.Builder
+		err := json.NewEncoder(&b).Encode(v.value)
+		if err != nil {
+			return nil, err
+		}
+		return strings.TrimSpace(b.String()), nil
+	}
+	if ints, ok := v.value.([]int); ok {
+		bigints := make([]int64, len(ints))
+		for i, num := range ints {
+			bigints[i] = int64(num)
+		}
+		v.value = bigints
+	}
+	return pqarray.Array(v.value).Value()
+}
+
+// DialectValuer implements the DialectValuer interface.
+func (v *arrayValue) DialectValuer(dialect string) (driver.Valuer, error) {
+	v.dialect = dialect
+	return v, nil
+}
+
+// EnumValue takes in an Enumeration and returns a driver.Valuer which
+// serializes the enum into a string and additionally checks if the enum is
+// valid.
+func EnumValue(value Enumeration) driver.Valuer {
+	return &enumValue{value: value}
+}
+
+type enumValue struct {
+	value Enumeration
+}
+
+// Value implements the driver.Valuer interface.
+func (v *enumValue) Value() (driver.Value, error) {
+	value := reflect.ValueOf(v.value)
+	names := v.value.Enumerate()
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i := int(value.Int())
+		if i < 0 || i >= len(names) {
+			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
+		}
+		name := names[i]
+		if name == "" && i != 0 {
+			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
+		}
+		return name, nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		i := int(value.Uint())
+		if i < 0 || i >= len(names) {
+			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
+		}
+		name := names[i]
+		if name == "" && i != 0 {
+			return nil, fmt.Errorf("%d is not a valid %T", i, v.value)
+		}
+		return name, nil
+	case reflect.String:
+		typ := value.Type()
+		name := value.String()
+		if getEnumIndex(name, names, typ) < 0 {
+			return nil, fmt.Errorf("%q is not a valid %T", name, v.value)
+		}
+		return name, nil
+	default:
+		return nil, fmt.Errorf("underlying type of %[1]v is neither an integer nor string (%[1]T)", v.value)
+	}
+}
+
+var (
+	enumIndexMu sync.RWMutex
+	enumIndex   = make(map[reflect.Type]map[string]int)
+)
+
+// getEnumIndex returns the index of the enum within the names slice.
+func getEnumIndex(name string, names []string, typ reflect.Type) int {
+	if len(names) <= 4 {
+		for idx := range names {
+			if names[idx] == name {
+				return idx
+			}
+		}
+		return -1
+	}
+	var nameIndex map[string]int
+	enumIndexMu.RLock()
+	nameIndex = enumIndex[typ]
+	enumIndexMu.RUnlock()
+	if nameIndex != nil {
+		idx, ok := nameIndex[name]
+		if !ok {
+			return -1
+		}
+		return idx
+	}
+	idx := -1
+	nameIndex = make(map[string]int)
+	for i := range names {
+		if names[i] == name {
+			idx = i
+		}
+		nameIndex[names[i]] = i
+	}
+	enumIndexMu.Lock()
+	enumIndex[typ] = nameIndex
+	enumIndexMu.Unlock()
+	return idx
+}
+
+// JSONValue takes in an interface{} and returns a driver.Valuer which runs the
+// value through json.Marshal before submitting it to the database.
+func JSONValue(value any) driver.Valuer {
+	return &jsonValue{value: value}
+}
+
+type jsonValue struct {
+	value any
+}
+
+// Value implements the driver.Valuer interface.
+func (v *jsonValue) Value() (driver.Value, error) {
+	var b strings.Builder
+	err := json.NewEncoder(&b).Encode(v.value)
+	return strings.TrimSpace(b.String()), err
+}
+
+// UUIDValue takes in a type whose underlying type must be a [16]byte and
+// returns a driver.Valuer.
+func UUIDValue(value any) driver.Valuer {
+	return &uuidValue{value: value}
+}
+
+type uuidValue struct {
+	dialect string
+	value   any
+}
+
+// Value implements the driver.Valuer interface.
+func (v *uuidValue) Value() (driver.Value, error) {
+	value := reflect.ValueOf(v.value)
+	typ := value.Type()
+	if value.Kind() != reflect.Array || value.Len() != 16 || typ.Elem().Kind() != reflect.Uint8 {
+		return nil, fmt.Errorf("%[1]v %[1]T is not [16]byte", v.value)
+	}
+	var uuid [16]byte
+	for i := 0; i < value.Len(); i++ {
+		uuid[i] = value.Index(i).Interface().(byte)
+	}
+	if v.dialect != DialectPostgres {
+		return uuid[:], nil
+	}
+	var buf [36]byte
+	googleuuid.EncodeHex(buf[:], uuid)
+	return string(buf[:]), nil
+}
+
+// DialectValuer implements the DialectValuer interface.
+func (v *uuidValue) DialectValuer(dialect string) (driver.Valuer, error) {
+	v.dialect = dialect
+	return v, nil
+}
+
+func preprocessValue(dialect string, value any) (any, error) {
+	if dialectValuer, ok := value.(DialectValuer); ok {
+		driverValuer, err := dialectValuer.DialectValuer(dialect)
+		if err != nil {
+			return nil, fmt.Errorf("calling DialectValuer on %#v: %w", dialectValuer, err)
+		}
+		value = driverValuer
+	}
+	switch value := value.(type) {
+	case nil:
+		return nil, nil
+	case Enumeration:
+		driverValue, err := (&enumValue{value: value}).Value()
+		if err != nil {
+			return nil, fmt.Errorf("converting %#v to string: %w", value, err)
+		}
+		return driverValue, nil
+	case [16]byte:
+		driverValue, err := (&uuidValue{value: value}).Value()
+		if err != nil {
+			if dialect == DialectPostgres {
+				return nil, fmt.Errorf("converting %#v to string: %w", value, err)
+			}
+			return nil, fmt.Errorf("converting %#v to bytes: %w", value, err)
+		}
+		return driverValue, nil
+	case driver.Valuer:
+		driverValue, err := value.Value()
+		if err != nil {
+			return nil, fmt.Errorf("calling Value on %#v: %w", value, err)
+		}
+		return driverValue, nil
+	}
+	return value, nil
 }

@@ -77,26 +77,6 @@ func TestWritef(t *testing.T) {
 		assert(t, tt)
 	})
 
-	t.Run("DialectValuer", func(t *testing.T) {
-		t.Parallel()
-		var tt TT
-		tt.format = "SELECT {}"
-		tt.values = []any{dialectValuer{
-			mysqlValuer: driverValuer{64.6464},
-			valuer:      driverValuer{int64(3)},
-		}}
-
-		tt.dialect = DialectMySQL
-		tt.wantQuery = `SELECT ?`
-		tt.wantArgs = []any{driverValuer{64.6464}}
-		assert(t, tt)
-
-		tt.dialect = DialectPostgres
-		tt.wantQuery = `SELECT $1`
-		tt.wantArgs = []any{driverValuer{int64(3)}}
-		assert(t, tt)
-	})
-
 	t.Run("expr", func(t *testing.T) {
 		t.Parallel()
 		var tt TT
@@ -762,7 +742,7 @@ func TestSprintf(t *testing.T) {
 			`, 'do not "rebind" ? ? ?'` +
 			`, "do not 'rebind' ? ? ?"` +
 			`, 'string with ''quotes'' must be escaped'` +
-			`, 'string with already escaped ''quotes'' except for ''this'''`
+			`, 'string with already escaped ''''quotes'''' except for ''this'''`
 		assert(t, tt)
 	})
 
@@ -786,7 +766,7 @@ func TestSprintf(t *testing.T) {
 			", `do not \" 'rebind' ? ? ?`" +
 			", \"do not ``` 'rebind' ? ? ?\"" +
 			`, 'string with ''quotes'' must be escaped'` +
-			`, 'string with already escaped ''quotes'' except for ''this'''`
+			`, 'string with already escaped ''''quotes'''' except for ''this'''`
 		assert(t, tt)
 	})
 
@@ -810,7 +790,7 @@ func TestSprintf(t *testing.T) {
 			", [do not \" 'rebind' [[[[[@pp]] @p3 @p1]" +
 			", \"do not [[[ 'rebind' [[[[[@pp]] @p3 @p1\"" +
 			`, 'string with ''quotes'' must be escaped'` +
-			`, 'string with already escaped ''quotes'' except for ''this'''`
+			`, 'string with already escaped ''''quotes'''' except for ''this'''`
 		assert(t, tt)
 	})
 
@@ -1043,115 +1023,297 @@ func TestSprint(t *testing.T) {
 		value       any
 		wantString  string
 	}
+	singaporeLocation, _ := time.LoadLocation("Asia/Singapore")
 
-	tests := []TT{
-		{description: "nil", value: nil, wantString: "NULL"},
-		{description: "true", value: true, wantString: "TRUE"},
-		{description: "false", value: false, wantString: "FALSE"},
-		{
-			description: "postgres []byte",
-			dialect:     DialectPostgres,
-			value:       []byte{0xff, 0xff},
-			wantString:  `'\xffff'`,
+	tests := []TT{{
+		description: "nil",
+		value:       nil,
+		wantString:  "NULL",
+	}, {
+		description: "true",
+		value:       true,
+		wantString:  "TRUE",
+	}, {
+		description: "false",
+		value:       false,
+		wantString:  "FALSE",
+	}, {
+		description: "sqlserver true",
+		dialect:     DialectSQLServer,
+		value:       true,
+		wantString:  "1",
+	}, {
+		description: "sqlserver false",
+		dialect:     DialectSQLServer,
+		value:       false,
+		wantString:  "0",
+	}, {
+		description: "postgres []byte",
+		dialect:     DialectPostgres,
+		value:       []byte{0xff, 0xff},
+		wantString:  `'\xffff'`,
+	}, {
+		description: "[]byte",
+		value:       []byte{0xff, 0xff},
+		wantString:  `x'ffff'`,
+	}, {
+		description: "string",
+		value:       "' OR ''test' = '; DROP TABLE users; -- ",
+		wantString:  `''' OR ''''test'' = ''; DROP TABLE users; -- '`,
+	}, {
+		description: "time.Time",
+		value:       time.Unix(0, 0).UTC(),
+		wantString:  `'1970-01-01 00:00:00'`,
+	}, {
+		description: "time.Time (SQLServer)",
+		dialect:     DialectSQLServer,
+		value:       time.Unix(0, 0).UTC(),
+		wantString:  `'1970-01-01 00:00:00+00:00'`,
+	}, {
+		description: "int",
+		value:       int(0),
+		wantString:  `0`,
+	}, {
+		description: "int8",
+		value:       int8(8),
+		wantString:  `8`,
+	}, {
+		description: "int16",
+		value:       int16(16),
+		wantString:  `16`,
+	}, {
+		description: "int32",
+		value:       int32(32),
+		wantString:  `32`,
+	}, {
+		description: "int64",
+		value:       int64(64),
+		wantString:  `64`,
+	}, {
+		description: "uint",
+		value:       uint(0),
+		wantString:  `0`,
+	}, {
+		description: "uint8",
+		value:       uint8(8),
+		wantString:  `8`,
+	}, {
+		description: "uint16",
+		value:       uint16(16),
+		wantString:  `16`,
+	}, {
+		description: "uint32",
+		value:       uint32(32),
+		wantString:  `32`,
+	}, {
+		description: "uint64",
+		value:       uint64(64),
+		wantString:  `64`,
+	}, {
+		description: "float32",
+		value:       float32(32.32),
+		wantString:  `32.31999969482422`,
+	}, {
+		description: "float64",
+		value:       float64(64.6464),
+		wantString:  `64.6464`,
+	}, {
+		description: "sql.NamedArg",
+		value:       sql.Named("test", 7),
+		wantString:  `7`,
+	}, {
+		description: "sql.NullBool NULL",
+		value:       sql.NullBool{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullBool true",
+		value:       sql.NullBool{Valid: true, Bool: true},
+		wantString:  `TRUE`,
+	}, {
+		description: "sql.NullBool false",
+		value:       sql.NullBool{Valid: true, Bool: false},
+		wantString:  `FALSE`,
+	}, {
+		description: "sqlserver sql.NullBool NULL",
+		dialect:     DialectSQLServer,
+		value:       sql.NullBool{},
+		wantString:  `NULL`,
+	}, {
+		description: "sqlserver sql.NullBool true",
+		dialect:     DialectSQLServer,
+		value:       sql.NullBool{Valid: true, Bool: true},
+		wantString:  `1`,
+	}, {
+		description: "sqlserver sql.NullBool false",
+		dialect:     DialectSQLServer,
+		value:       sql.NullBool{Valid: true, Bool: false},
+		wantString:  `0`,
+	}, {
+		description: "sql.NullFloat64 NULL",
+		value:       sql.NullFloat64{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullFloat64",
+		value:       sql.NullFloat64{Valid: true, Float64: 3.0},
+		wantString:  `3`,
+	}, {
+		description: "sql.NullInt64Field NULL",
+		value:       sql.NullInt64{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullInt64Field",
+		value:       sql.NullInt64{Valid: true, Int64: 5},
+		wantString:  `5`,
+	}, {
+		description: "sql.NullInt32 NULL",
+		value:       sql.NullInt32{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullInt32",
+		value:       sql.NullInt32{Valid: true, Int32: 7},
+		wantString:  `7`,
+	}, {
+		description: "sql.NullStringField NULL",
+		value:       sql.NullString{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullStringField",
+		value:       sql.NullString{Valid: true, String: "pp"},
+		wantString:  `'pp'`,
+	}, {
+		description: "sql.NullTimeField NULL",
+		value:       sql.NullTime{},
+		wantString:  `NULL`,
+	}, {
+		description: "sql.NullTime",
+		value: sql.NullTime{
+			Valid: true,
+			Time:  time.Unix(0, 0).UTC(),
 		},
-		{
-			description: "[]byte",
-			value:       []byte{0xff, 0xff},
-			wantString:  `x'ffff'`,
+		wantString: `'1970-01-01 00:00:00'`,
+	}, {
+		description: "sql.NullTime (Postgres)",
+		dialect:     DialectPostgres,
+		value: sql.NullTime{
+			Valid: true,
+			Time:  time.Unix(0, 0).UTC(),
 		},
-		{
-			description: "string",
-			value:       "' OR ''test' = '; DROP TABLE users; -- ",
-			wantString:  `''' OR ''test'' = ''; DROP TABLE users; -- '`,
-		},
-		{
-			description: "time.Time",
-			value:       time.Unix(0, 0).UTC(),
-			wantString:  `'1970-01-01 00:00:00'`,
-		},
-		{
-			description: "time.Time (SQLServer)",
-			dialect:     DialectSQLServer,
-			value:       time.Unix(0, 0).UTC(),
-			wantString:  `'1970-01-01 00:00:00+00:00'`,
-		},
-		{description: "int", value: int(0), wantString: `0`},
-		{description: "int8", value: int8(8), wantString: `8`},
-		{description: "int16", value: int16(16), wantString: `16`},
-		{description: "int32", value: int32(32), wantString: `32`},
-		{description: "int64", value: int64(64), wantString: `64`},
-		{description: "uint", value: uint(0), wantString: `0`},
-		{description: "uint8", value: uint8(8), wantString: `8`},
-		{description: "uint16", value: uint16(16), wantString: `16`},
-		{description: "uint32", value: uint32(32), wantString: `32`},
-		{description: "uint64", value: uint64(64), wantString: `64`},
-		// floats kinda iffy
-		{description: "float32", value: float32(32.32), wantString: `32.31999969482422`},
-		{description: "float64", value: float64(64.6464), wantString: `64.6464`},
-		// sql.NullXXX
-		{description: "sql.NamedArg", value: sql.Named("test", 7), wantString: `7`},
-		{description: "sql.NullBool NULL", value: sql.NullBool{}, wantString: `NULL`},
-		{description: "sql.NullBool true", value: sql.NullBool{Valid: true, Bool: true}, wantString: `TRUE`},
-		{description: "sql.NullBool false", value: sql.NullBool{Valid: true, Bool: false}, wantString: `FALSE`},
-		{description: "sql.NullFloat64 NULL", value: sql.NullFloat64{}, wantString: `NULL`},
-		{description: "sql.NullFloat64", value: sql.NullFloat64{Valid: true, Float64: 3.0}, wantString: `3`},
-		{description: "sql.NullInt64Field NULL", value: sql.NullInt64{}, wantString: `NULL`},
-		{description: "sql.NullInt64Field", value: sql.NullInt64{Valid: true, Int64: 5}, wantString: `5`},
-		{description: "sql.NullInt32 NULL", value: sql.NullInt32{}, wantString: `NULL`},
-		{description: "sql.NullInt32", value: sql.NullInt32{Valid: true, Int32: 7}, wantString: `7`},
-		{description: "sql.NullStringField NULL", value: sql.NullString{}, wantString: `NULL`},
-		{description: "sql.NullStringField", value: sql.NullString{Valid: true, String: "pp"}, wantString: `'pp'`},
-		{description: "sql.NullTimeField NULL", value: sql.NullTime{}, wantString: `NULL`},
-		{
-			description: "sql.NullTime",
-			value:       sql.NullTime{Valid: true, Time: time.Unix(0, 0).UTC()},
-			wantString:  `'1970-01-01 00:00:00'`,
-		},
-		{
-			description: "sql.NullTime (Postgres)",
-			dialect:     DialectPostgres,
-			value:       sql.NullTime{Valid: true, Time: time.Unix(0, 0).UTC()},
-			wantString:  `'1970-01-01 00:00:00+00:00'`,
-		},
-		// driver.Valuer
-		{description: "int64 Valuer", value: driverValuer{int64(3)}, wantString: `3`},
-		{description: "float64 Valuer", value: driverValuer{64.6464}, wantString: `64.6464`},
-		{description: "bool Valuer 1", value: driverValuer{true}, wantString: `TRUE`},
-		{description: "bool Valuer 0", value: driverValuer{false}, wantString: `FALSE`},
-		{description: "bytes Valuer", value: driverValuer{[]byte{0xab, 0xba}}, wantString: `x'abba'`},
-		{
-			description: "string Valuer",
-			value:       driverValuer{`'' ha '; DROP TABLE users; --`},
-			wantString:  `''' ha ''; DROP TABLE users; --'`,
-		},
-		{
-			description: "time.Time Valuer",
-			value:       driverValuer{time.Unix(0, 0).UTC()},
-			wantString:  `'1970-01-01 00:00:00'`,
-		},
-		{
-			description: "time.Time Valuer (Postgres)",
-			dialect:     DialectPostgres,
-			value:       driverValuer{time.Unix(0, 0).UTC()},
-			wantString:  `'1970-01-01 00:00:00+00:00'`,
-		},
-	}
-	loc, _ := time.LoadLocation("Asia/Singapore")
-	tests = append(tests, TT{
+		wantString: `'1970-01-01 00:00:00+00:00'`,
+	}, {
+		description: "int64 Valuer",
+		value:       driverValuer{int64(3)},
+		wantString:  `3`,
+	}, {
+		description: "float64 Valuer",
+		value:       driverValuer{64.6464},
+		wantString:  `64.6464`,
+	}, {
+		description: "bool Valuer 1",
+		value:       driverValuer{true},
+		wantString:  `TRUE`,
+	}, {
+		description: "bool Valuer 0",
+		value:       driverValuer{false},
+		wantString:  `FALSE`,
+	}, {
+		description: "bytes Valuer",
+		value:       driverValuer{[]byte{0xab, 0xba}},
+		wantString:  `x'abba'`,
+	}, {
+		description: "string Valuer",
+		value:       driverValuer{`'' ha '; DROP TABLE users; --`},
+		wantString:  `''''' ha ''; DROP TABLE users; --'`,
+	}, {
+		description: "time.Time Valuer",
+		value:       driverValuer{time.Unix(0, 0).UTC()},
+		wantString:  `'1970-01-01 00:00:00'`,
+	}, {
 		description: "time.Time Valuer (Postgres)",
 		dialect:     DialectPostgres,
-		value:       driverValuer{time.Unix(22, 330000000).In(loc)},
+		value:       driverValuer{time.Unix(0, 0).UTC()},
+		wantString:  `'1970-01-01 00:00:00+00:00'`,
+	}, {
+		description: "time.Time Valuer (Postgres)",
+		dialect:     DialectPostgres,
+		value:       driverValuer{time.Unix(22, 330000000).In(singaporeLocation)},
 		wantString:  `'1970-01-01 07:30:22.33+07:30'`,
-	})
-	// pointers
-	intValue := 33
-	stringValue := "test string"
-	var nilIntPtr *int
-	var nilStringPtr *string
-	tests = append(tests, TT{description: "int ptr", value: &intValue, wantString: `33`})
-	tests = append(tests, TT{description: "nil int ptr", value: nilIntPtr, wantString: `NULL`})
-	tests = append(tests, TT{description: "string ptr", value: &stringValue, wantString: `'test string'`})
-	tests = append(tests, TT{description: "nil string ptr", value: nilStringPtr, wantString: `NULL`})
+	}, {
+		description: "string Valuer ptr",
+		value:       &driverValuer{`'' ha '; DROP TABLE users; --`},
+		wantString:  `''''' ha ''; DROP TABLE users; --'`,
+	}, {
+		description: "int ptr",
+		value: func() *int {
+			num := 33
+			return &num
+		}(),
+		wantString: `33`,
+	}, {
+		description: "nil int ptr",
+		value: func() *int {
+			var num *int
+			return num
+		}(),
+		wantString: `NULL`,
+	}, {
+		description: "string ptr",
+		value: func() *string {
+			str := "test string"
+			return &str
+		}(),
+		wantString: `'test string'`,
+	}, {
+		description: "nil string ptr",
+		value: func() *string {
+			var str *string
+			return str
+		}(),
+		wantString: `NULL`,
+	}, {
+		description: "sql.NullInt64 ptr",
+		value: &sql.NullInt64{
+			Valid: true,
+			Int64: 33,
+		},
+		wantString: `33`,
+	}, {
+		description: "sql.NullString ptr",
+		value: &sql.NullString{
+			Valid:  true,
+			String: "test string",
+		},
+		wantString: `'test string'`,
+	}, {
+		description: "mysql string",
+		dialect:     DialectMySQL,
+		value:       "the quick brown fox",
+		wantString:  `'the quick brown fox'`,
+	}, {
+		description: "mysql string newlines in middle",
+		dialect:     DialectMySQL,
+		value:       "the quick\nbrown\r\nfox",
+		wantString:  `CONCAT('the quick', CHAR(10), 'brown', CHAR(13), CHAR(10), 'fox')`,
+	}, {
+		description: "mysql string newlines at end",
+		dialect:     DialectMySQL,
+		value:       "\nthe quick brown fox\r\n",
+		wantString:  `CONCAT(CHAR(10), 'the quick brown fox', CHAR(13), CHAR(10))`,
+	}, {
+		description: "postgres string",
+		dialect:     DialectPostgres,
+		value:       "the quick brown fox",
+		wantString:  `'the quick brown fox'`,
+	}, {
+		description: "postgres string newlines in middle",
+		dialect:     DialectPostgres,
+		value:       "the quick\nbrown\r\nfox",
+		wantString:  `'the quick' || CHR(10) || 'brown' || CHR(13) || CHR(10) || 'fox'`,
+	}, {
+		description: "postgres string newlines at end",
+		dialect:     DialectPostgres,
+		value:       "\nthe quick brown fox\r\n",
+		wantString:  `CHR(10) || 'the quick brown fox' || CHR(13) || CHR(10)`,
+	}}
 
 	for _, tt := range tests {
 		tt := tt

@@ -1,6 +1,8 @@
 package sq
 
 import (
+	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -108,7 +110,7 @@ func TestDialectExpression(t *testing.T) {
 		DialectValue(DialectSQLite, Expr("sqlite")).
 		DialectValue(DialectPostgres, Expr("postgres")).
 		DialectValue(DialectMySQL, Expr("mysql")).
-		DialectValue(DialectSQLServer, Expr("sqlserver"))
+		DialectExpr(DialectSQLServer, "{}", Expr("sqlserver"))
 	var tt TestTable
 	tt.item = expr
 	// default
@@ -196,6 +198,198 @@ func TestCaseExpressions(t *testing.T) {
 		t.Run(tt.description, func(t *testing.T) {
 			t.Parallel()
 			tt.assertErr(t, ErrFaultySQL)
+		})
+	}
+}
+
+func TestSelectValues(t *testing.T) {
+	type TestTable struct {
+		description string
+		dialect     string
+		item        SelectValues
+		wantQuery   string
+		wantArgs    []any
+	}
+
+	t.Run("dialect alias and fields", func(t *testing.T) {
+		selectValues := SelectValues{
+			Alias: "aaa",
+		}
+		if diff := testutil.Diff(selectValues.GetAlias(), "aaa"); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		if diff := testutil.Diff(selectValues.GetDialect(), ""); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		_, ok := selectValues.SetFetchableFields(nil)
+		if diff := testutil.Diff(ok, false); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		gotField, _, _ := ToSQL("", selectValues.Field("bbb"), nil)
+		if diff := testutil.Diff(gotField, "aaa.bbb"); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+	})
+
+	tests := []TestTable{{
+		description: "empty",
+		item:        SelectValues{},
+		wantQuery:   "",
+		wantArgs:    nil,
+	}, {
+		description: "no columns",
+		item: SelectValues{
+			RowValues: [][]any{
+				{1, 2, 3},
+				{4, 5, 6},
+				{7, 8, 9},
+			},
+		},
+		wantQuery: "SELECT ?, ?, ?" +
+			" UNION ALL SELECT ?, ?, ?" +
+			" UNION ALL SELECT ?, ?, ?",
+		wantArgs: []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}, {
+		description: "postgres",
+		dialect:     DialectPostgres,
+		item: SelectValues{
+			Columns: []string{"a", "b", "c"},
+			RowValues: [][]any{
+				{1, 2, 3},
+				{4, 5, 6},
+				{7, 8, 9},
+			},
+		},
+		wantQuery: "SELECT $1 AS a, $2 AS b, $3 AS c" +
+			" UNION ALL SELECT $4, $5, $6" +
+			" UNION ALL SELECT $7, $8, $9",
+		wantArgs: []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.description, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			var gotArgs []any
+			err := tt.item.WriteSQL(context.Background(), tt.dialect, &buf, &gotArgs, nil)
+			if err != nil {
+				t.Fatal(testutil.Callers(), err)
+			}
+			gotQuery := buf.String()
+			if diff := testutil.Diff(gotQuery, tt.wantQuery); diff != "" {
+				t.Error(testutil.Callers(), diff)
+			}
+			if diff := testutil.Diff(gotArgs, tt.wantArgs); diff != "" {
+				t.Error(testutil.Callers(), diff)
+			}
+		})
+	}
+}
+
+func TestTableValues(t *testing.T) {
+	type TestTable struct {
+		description string
+		dialect     string
+		item        TableValues
+		wantQuery   string
+		wantArgs    []any
+	}
+
+	t.Run("dialect alias columns and fields", func(t *testing.T) {
+		tableValues := TableValues{
+			Alias:   "aaa",
+			Columns: []string{"a", "b", "c"},
+		}
+		if diff := testutil.Diff(tableValues.GetAlias(), "aaa"); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		if diff := testutil.Diff(tableValues.GetDialect(), ""); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		_, ok := tableValues.SetFetchableFields(nil)
+		if diff := testutil.Diff(ok, false); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		gotColumns := tableValues.GetColumns()
+		wantColumns := []string{"a", "b", "c"}
+		if diff := testutil.Diff(gotColumns, wantColumns); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+		gotField, _, _ := ToSQL("", tableValues.Field("bbb"), nil)
+		wantField := "aaa.bbb"
+		if diff := testutil.Diff(gotField, wantField); diff != "" {
+			t.Error(testutil.Callers(), diff)
+		}
+	})
+
+	tests := []TestTable{{
+		description: "empty",
+		item:        TableValues{},
+		wantQuery:   "",
+		wantArgs:    nil,
+	}, {
+		description: "no columns",
+		item: TableValues{
+			RowValues: [][]any{
+				{1, 2, 3},
+				{4, 5, 6},
+				{7, 8, 9},
+			},
+		},
+		wantQuery: "VALUES (?, ?, ?)" +
+			", (?, ?, ?)" +
+			", (?, ?, ?)",
+		wantArgs: []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}, {
+		description: "postgres",
+		dialect:     DialectPostgres,
+		item: TableValues{
+			Columns: []string{"a", "b", "c"},
+			RowValues: [][]any{
+				{1, 2, 3},
+				{4, 5, 6},
+				{7, 8, 9},
+			},
+		},
+		wantQuery: "VALUES ($1, $2, $3)" +
+			", ($4, $5, $6)" +
+			", ($7, $8, $9)",
+		wantArgs: []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}, {
+		description: "mysql",
+		dialect:     DialectMySQL,
+		item: TableValues{
+			Columns: []string{"a", "b", "c"},
+			RowValues: [][]any{
+				{1, 2, 3},
+				{4, 5, 6},
+				{7, 8, 9},
+			},
+		},
+		wantQuery: "VALUES ROW(?, ?, ?)" +
+			", ROW(?, ?, ?)" +
+			", ROW(?, ?, ?)",
+		wantArgs: []any{1, 2, 3, 4, 5, 6, 7, 8, 9},
+	}}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.description, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			var gotArgs []any
+			err := tt.item.WriteSQL(context.Background(), tt.dialect, &buf, &gotArgs, nil)
+			if err != nil {
+				t.Fatal(testutil.Callers(), err)
+			}
+			gotQuery := buf.String()
+			if diff := testutil.Diff(gotQuery, tt.wantQuery); diff != "" {
+				t.Error(testutil.Callers(), diff)
+			}
+			if diff := testutil.Diff(gotArgs, tt.wantArgs); diff != "" {
+				t.Error(testutil.Callers(), diff)
+			}
 		})
 	}
 }

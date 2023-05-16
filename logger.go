@@ -103,7 +103,6 @@ var _ SqLogger = (*sqLogger)(nil)
 var defaultLogger = NewLogger(os.Stdout, "", log.LstdFlags, LoggerConfig{
 	ShowTimeTaken: true,
 	ShowCaller:    true,
-	HideArgs:      true,
 })
 
 var verboseLogger = NewLogger(os.Stdout, "", log.LstdFlags, LoggerConfig{

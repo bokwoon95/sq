@@ -2,11 +2,13 @@ package sq
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/bokwoon95/sq/internal/googleuuid"
@@ -15,525 +17,627 @@ import (
 
 // Row represents the state of a row after a call to rows.Next().
 type Row struct {
-	active       bool
-	index        int
-	fields       []Field
-	dest         []any
-	destIsString map[int]struct{}
-	destIsUUID   map[int]struct{}
-	dialect      string
+	dialect    string
+	sqlRows    *sql.Rows
+	index      int
+	fields     []Field
+	scanDest   []any
+	rawSQLMode bool
 }
 
-func newRow(dialect string) *Row {
-	return &Row{
-		dialect:      dialect,
-		destIsString: make(map[int]struct{}),
-		destIsUUID:   make(map[int]struct{}),
+// ColumnTypes returns the names of the columns returned by the query. This
+// method can only be called in a rowmapper if it is paired with a raw SQL
+// query e.g. Queryf("SELECT * FROM my_table"). Otherwise, an error will be
+// returned.
+func (row *Row) Columns() []string {
+	if row.sqlRows == nil {
+		row.rawSQLMode = true
+		return nil
 	}
+	columns, err := row.sqlRows.Columns()
+	if err != nil {
+		panic(fmt.Errorf(callsite(1)+"row.Columns(): %w", err))
+	}
+	return columns
 }
 
-// Scan scans the expression into dest.
-func (r *Row) Scan(dest any, format string, values ...any) {
-	r.scan(dest, Expr(format, values...), 1)
+// ColumnTypes returns the column types returned by the query. This method can
+// only be called in a rowmapper if it is paired with a raw SQL query e.g.
+// Queryf("SELECT * FROM my_table"). Otherwise, an error will be returned.
+func (row *Row) ColumnTypes() []*sql.ColumnType {
+	if row.sqlRows == nil {
+		row.rawSQLMode = true
+		return nil
+	}
+	columnTypes, err := row.sqlRows.ColumnTypes()
+	if err != nil {
+		panic(fmt.Errorf(callsite(1)+"row.ColumnTypes(): %w", err))
+	}
+	return columnTypes
 }
 
-// ScanField scans the field into dest.
-func (r *Row) ScanField(dest any, field Field) {
-	r.scan(dest, field, 1)
+// Values returns the values of the current row. This method can only be called
+// in a rowmapper if it is paired with a raw SQL query e.g. Queryf("SELECT *
+// FROM my_table"). Otherwise, an error will be returned.
+func (row *Row) Values() []any {
+	if row.sqlRows == nil {
+		row.rawSQLMode = true
+		return nil
+	}
+	if len(row.scanDest) == 0 {
+		columns, err := row.sqlRows.Columns()
+		if err != nil {
+			panic(fmt.Errorf(callsite(1)+"row.Values(): %w", err))
+		}
+		row.scanDest = make([]any, len(columns))
+	}
+	values := make([]any, len(row.scanDest))
+	for i := range row.scanDest {
+		row.scanDest[i] = &values[i]
+	}
+	err := row.sqlRows.Scan(row.scanDest...)
+	if err != nil {
+		panic(fmt.Errorf(callsite(1)+"row.Values(): %w", err))
+	}
+	return values
 }
 
-func (r *Row) scan(dest any, field Field, skip int) {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		switch dest.(type) {
+// Value returns the value of the expression. It is intended for use cases
+// where you only know the name of the column but not its type to scan into.
+// The underlying type of the value is determined by the database driver you
+// are using.
+func (row *Row) Value(format string, values ...any) any {
+	if row.sqlRows == nil {
+		var value any
+		row.fields = append(row.fields, Expr(format, values...))
+		row.scanDest = append(row.scanDest, &value)
+		return nil
+	}
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*any)
+	return *scanDest
+}
+
+// Scan scans the expression into destPtr.
+func (row *Row) Scan(destPtr any, format string, values ...any) {
+	row.scan(destPtr, Expr(format, values...), 1)
+}
+
+// ScanField scans the field into destPtr.
+func (row *Row) ScanField(destPtr any, field Field) {
+	row.scan(destPtr, field, 1)
+}
+
+func (row *Row) scan(destPtr any, field Field, skip int) {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		switch destPtr.(type) {
 		case *bool, *sql.NullBool:
-			r.dest = append(r.dest, &sql.NullBool{})
+			row.scanDest = append(row.scanDest, &sql.NullBool{})
 		case *float64, *sql.NullFloat64:
-			r.dest = append(r.dest, &sql.NullFloat64{})
+			row.scanDest = append(row.scanDest, &sql.NullFloat64{})
 		case *int32, *sql.NullInt32:
-			r.dest = append(r.dest, &sql.NullInt32{})
+			row.scanDest = append(row.scanDest, &sql.NullInt32{})
 		case *int, *int64, *sql.NullInt64:
-			r.dest = append(r.dest, &sql.NullInt64{})
+			row.scanDest = append(row.scanDest, &sql.NullInt64{})
 		case *string, *sql.NullString:
-			r.dest = append(r.dest, &sql.NullString{})
+			row.scanDest = append(row.scanDest, &sql.NullString{})
 		case *time.Time, *sql.NullTime:
-			r.dest = append(r.dest, &sql.NullTime{})
+			row.scanDest = append(row.scanDest, &sql.NullTime{})
 		default:
-			if reflect.TypeOf(dest).Kind() != reflect.Ptr {
-				panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
+			if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
+				panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
 			}
-			r.dest = append(r.dest, dest)
+			row.scanDest = append(row.scanDest, destPtr)
 		}
 		return
 	}
-	switch ptr := dest.(type) {
+	defer func() {
+		row.index++
+	}()
+	switch destPtr := destPtr.(type) {
 	case *bool:
-		nullbool := r.dest[r.index].(*sql.NullBool)
-		*ptr = nullbool.Bool
+		scanDest := row.scanDest[row.index].(*sql.NullBool)
+		*destPtr = scanDest.Bool
 	case *sql.NullBool:
-		nullbool := r.dest[r.index].(*sql.NullBool)
-		*ptr = *nullbool
+		scanDest := row.scanDest[row.index].(*sql.NullBool)
+		*destPtr = *scanDest
 	case *float64:
-		nullfloat64 := r.dest[r.index].(*sql.NullFloat64)
-		*ptr = nullfloat64.Float64
+		scanDest := row.scanDest[row.index].(*sql.NullFloat64)
+		*destPtr = scanDest.Float64
 	case *sql.NullFloat64:
-		nullfloat64 := r.dest[r.index].(*sql.NullFloat64)
-		*ptr = *nullfloat64
+		scanDest := row.scanDest[row.index].(*sql.NullFloat64)
+		*destPtr = *scanDest
 	case *int:
-		nullint64 := r.dest[r.index].(*sql.NullInt64)
-		*ptr = int(nullint64.Int64)
+		scanDest := row.scanDest[row.index].(*sql.NullInt64)
+		*destPtr = int(scanDest.Int64)
 	case *int32:
-		nullint32 := r.dest[r.index].(*sql.NullInt32)
-		*ptr = nullint32.Int32
+		scanDest := row.scanDest[row.index].(*sql.NullInt32)
+		*destPtr = scanDest.Int32
 	case *sql.NullInt32:
-		nullint32 := r.dest[r.index].(*sql.NullInt32)
-		*ptr = *nullint32
+		scanDest := row.scanDest[row.index].(*sql.NullInt32)
+		*destPtr = *scanDest
 	case *int64:
-		nullint64 := r.dest[r.index].(*sql.NullInt64)
-		*ptr = nullint64.Int64
+		scanDest := row.scanDest[row.index].(*sql.NullInt64)
+		*destPtr = scanDest.Int64
 	case *sql.NullInt64:
-		nullint64 := r.dest[r.index].(*sql.NullInt64)
-		*ptr = *nullint64
+		scanDest := row.scanDest[row.index].(*sql.NullInt64)
+		*destPtr = *scanDest
 	case *string:
-		nullstring := r.dest[r.index].(*sql.NullString)
-		*ptr = nullstring.String
+		scanDest := row.scanDest[row.index].(*sql.NullString)
+		*destPtr = scanDest.String
 	case *sql.NullString:
-		nullstring := r.dest[r.index].(*sql.NullString)
-		*ptr = *nullstring
+		scanDest := row.scanDest[row.index].(*sql.NullString)
+		*destPtr = *scanDest
 	case *time.Time:
-		nulltime := r.dest[r.index].(*sql.NullTime)
-		*ptr = nulltime.Time
+		scanDest := row.scanDest[row.index].(*sql.NullTime)
+		*destPtr = scanDest.Time
 	case *sql.NullTime:
-		nulltime := r.dest[r.index].(*sql.NullTime)
-		*ptr = *nulltime
+		scanDest := row.scanDest[row.index].(*sql.NullTime)
+		*destPtr = *scanDest
 	default:
-		destValue := reflect.ValueOf(dest)
-		if destValue.Type().Kind() != reflect.Ptr {
-			panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
-		}
-		destValue.Elem().Set(reflect.ValueOf(r.dest[r.index]).Elem())
+		destValue := reflect.ValueOf(destPtr).Elem()
+		srcValue := reflect.ValueOf(row.scanDest[row.index]).Elem()
+		destValue.Set(srcValue)
 	}
-	r.index++
 }
 
-// Array scans the array expression into dest.
-func (r *Row) Array(dest any, format string, values ...any) {
-	r.array(dest, Expr(format, values...), 1)
+// Array scans the array expression into destPtr. The destPtr must be a pointer
+// to a []string, []int, []int64, []int32, []float64, []float32 or []bool.
+func (row *Row) Array(destPtr any, format string, values ...any) {
+	row.array(destPtr, Expr(format, values...), 1)
 }
 
-// ArrayField scans the array field into dest.
-func (r *Row) ArrayField(dest any, field Array) {
-	r.array(dest, field, 1)
+// ArrayField scans the array field into destPtr. The destPtr must be a pointer
+// to a []string, []int, []int64, []int32, []float64, []float32 or []bool.
+func (row *Row) ArrayField(destPtr any, field Array) {
+	row.array(destPtr, field, 1)
 }
 
-func (r *Row) array(dest any, field Array, skip int) {
-	if !r.active {
-		if reflect.TypeOf(dest).Kind() != reflect.Ptr {
-			panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
+func (row *Row) array(destPtr any, field Array, skip int) {
+	if row.sqlRows == nil {
+		if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
+			panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
 		}
-		r.fields = append(r.fields, field)
-		if r.dialect == DialectPostgres {
-			r.dest = append(r.dest, pqarray.Array(dest))
-		} else {
-			r.dest = append(r.dest, &[]byte{})
+		if row.dialect == DialectPostgres {
+			switch destPtr.(type) {
+			case *[]string, *[]int, *[]int64, *[]int32, *[]float64, *[]float32, *[]bool:
+				break
+			default:
+				panic(fmt.Errorf(callsite(skip+1)+"destptr (%T) must be either a pointer to a []string, []int, []int64, []int32, []float64, []float32 or []bool", destPtr))
+			}
 		}
-		r.destIsString[len(r.dest)-1] = struct{}{}
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &nullBytes{
+			dialect:     row.dialect,
+			displayType: displayTypeString,
+		})
 		return
 	}
-	if r.dialect == DialectPostgres {
-		switch pqArray := r.dest[r.index].(type) {
-		case *pqarray.BoolArray:
-			dest, ok := dest.(*[]bool)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]bool for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]bool, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.Int64Array:
-			dest, ok := dest.(*[]int64)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]int64 for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]int64, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.Int32Array:
-			dest, ok := dest.(*[]int32)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]int32 for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]int32, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.Float64Array:
-			dest, ok := dest.(*[]float64)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]float64 for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]float64, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.Float32Array:
-			dest, ok := dest.(*[]float32)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]float32 for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]float32, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.StringArray:
-			dest, ok := dest.(*[]string)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[]string for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([]string, len(*pqArray))
-			}
-			copy(*dest, *pqArray)
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.ByteaArray:
-			dest, ok := dest.(*[][]byte)
-			if !ok {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray expected *[][]byte for dest, got %T", file, line, dest))
-			}
-			if len(*dest) < len(*pqArray) {
-				*dest = make([][]byte, len(*pqArray))
-			}
-			for i, b := range *pqArray {
-				if len((*dest)[i]) < len(b) {
-					(*dest)[i] = make([]byte, len(b))
-				}
-				copy((*dest)[i], b)
-			}
-			*dest = (*dest)[:len(*pqArray)]
-		case *pqarray.GenericArray:
-			destValue := reflect.ValueOf(dest)
-			if destValue.Type().Kind() != reflect.Ptr {
-				panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
-			}
-			destValue.Elem().Set(reflect.ValueOf(r.dest[r.index]).Elem())
-		default:
-		}
-	} else {
-		bptr := r.dest[r.index].(*[]byte)
-		if len(*bptr) > 0 {
-			err := json.Unmarshal(*bptr, dest)
-			if err != nil {
-				_, file, line, _ := runtime.Caller(skip + 1)
-				panic(fmt.Errorf("%s:%d ScanArray unmarshaling json '%s' into %T: %w", file, line, string(*bptr), dest, err))
-			}
-		}
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*nullBytes)
+	if !scanDest.valid {
+		return
 	}
-	r.index++
+	if row.dialect != DialectPostgres {
+		err := json.Unmarshal(scanDest.bytes, destPtr)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unmarshaling json %q into %T: %w", string(scanDest.bytes), destPtr, err))
+		}
+		return
+	}
+	switch destPtr := destPtr.(type) {
+	case *[]string:
+		var array pqarray.StringArray
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to string array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]string, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	case *[]int:
+		var array pqarray.Int64Array
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to int64 array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]int, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		for i, num := range array {
+			(*destPtr)[i] = int(num)
+		}
+	case *[]int64:
+		var array pqarray.Int64Array
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to int64 array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]int64, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	case *[]int32:
+		var array pqarray.Int32Array
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to int32 array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]int32, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	case *[]float64:
+		var array pqarray.Float64Array
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to float64 array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]float64, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	case *[]float32:
+		var array pqarray.Float32Array
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to float32 array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]float32, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	case *[]bool:
+		var array pqarray.BoolArray
+		err := array.Scan(scanDest.bytes)
+		if err != nil {
+			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to bool array: %w", string(scanDest.bytes), err))
+		}
+		*destPtr = (*destPtr)[:cap(*destPtr)]
+		if len(*destPtr) < len(array) {
+			*destPtr = make([]bool, len(array))
+		}
+		*destPtr = (*destPtr)[:len(array)]
+		copy(*destPtr, array)
+	default:
+		panic(fmt.Errorf(callsite(skip+1)+"destptr (%T) must be either a pointer to a []string, []int, []int64, []int32, []float64, []float32 or []bool", destPtr))
+	}
 }
 
 // Bytes returns the []byte value of the expression.
-func (r *Row) Bytes(format string, values ...any) []byte {
-	return r.BytesField(Expr(format, values...))
+func (row *Row) Bytes(format string, values ...any) []byte {
+	return row.BytesField(Expr(format, values...))
 }
 
 // BytesField returns the []byte value of the field.
-func (r *Row) BytesField(field Binary) []byte {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &[]byte{})
+func (row *Row) BytesField(field Binary) []byte {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &nullBytes{
+			dialect: row.dialect,
+		})
 		return nil
 	}
-	bptr := r.dest[r.index].(*[]byte)
-	r.index++
-	if len(*bptr) == 0 {
-		return nil
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*nullBytes)
+	var b []byte
+	if scanDest.valid {
+		b = make([]byte, len(scanDest.bytes))
+		copy(b, scanDest.bytes)
 	}
-	b := make([]byte, len(*bptr))
-	copy(b, *bptr)
 	return b
 }
 
 // == Bool == //
 
 // Bool returns the bool value of the expression.
-func (r *Row) Bool(format string, values ...any) bool {
-	return r.NullBoolField(Expr(format, values...)).Bool
+func (row *Row) Bool(format string, values ...any) bool {
+	return row.NullBoolField(Expr(format, values...)).Bool
 }
 
 // BoolField returns the bool value of the field.
-func (r *Row) BoolField(field Boolean) bool {
-	return r.NullBoolField(field).Bool
+func (row *Row) BoolField(field Boolean) bool {
+	return row.NullBoolField(field).Bool
 }
 
 // NullBool returns the sql.NullBool value of the expression.
-func (r *Row) NullBool(format string, values ...any) sql.NullBool {
-	return r.NullBoolField(Expr(format, values...))
+func (row *Row) NullBool(format string, values ...any) sql.NullBool {
+	return row.NullBoolField(Expr(format, values...))
 }
 
 // NullBoolField returns the sql.NullBool value of the field.
-func (r *Row) NullBoolField(field Boolean) sql.NullBool {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullBool{})
+func (row *Row) NullBoolField(field Boolean) sql.NullBool {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &sql.NullBool{})
 		return sql.NullBool{}
 	}
-	nullbool := r.dest[r.index].(*sql.NullBool)
-	r.index++
-	return *nullbool
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullBool)
+	return *scanDest
 }
 
-// Enum scans the enum expression into dest.
-func (r *Row) Enum(dest Enumeration, format string, values ...any) {
-	r.enum(dest, Expr(format, values...), 1)
+// Enum scans the enum expression into destPtr.
+func (row *Row) Enum(destPtr Enumeration, format string, values ...any) {
+	row.enum(destPtr, Expr(format, values...), 1)
 }
 
-// EnumField scans the enum field into dest.
-func (r *Row) EnumField(dest Enumeration, field Enum) {
-	r.enum(dest, field, 1)
+// EnumField scans the enum field into destPtr.
+func (row *Row) EnumField(destPtr Enumeration, field Enum) {
+	row.enum(destPtr, field, 1)
 }
 
-func (r *Row) enum(dest Enumeration, field Enum, skip int) {
-	if !r.active {
-		typ := reflect.TypeOf(dest)
-		if typ.Kind() != reflect.Ptr {
-			panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
+func (row *Row) enum(destPtr Enumeration, field Enum, skip int) {
+	if row.sqlRows == nil {
+		destType := reflect.TypeOf(destPtr)
+		if destType.Kind() != reflect.Ptr {
+			panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
 		}
-		switch typ.Elem().Kind() {
+		row.fields = append(row.fields, field)
+		switch destType.Elem().Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 			reflect.String:
+			row.scanDest = append(row.scanDest, &sql.NullString{})
 		default:
-			panic(fmt.Errorf("underlying type of %[1]v is neither an integer or string (%[1]T)", dest))
+			panic(fmt.Errorf(callsite(skip+1)+"underlying type of %[1]v is neither an integer or string (%[1]T)", destPtr))
 		}
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullString{})
 		return
 	}
-	nullstring := r.dest[r.index].(*sql.NullString)
-	r.index++
-	val := reflect.ValueOf(dest).Elem()
-	names := dest.Enumerate()
-	i := 0
-	if nullstring.Valid {
-		i = getEnumIndex(nullstring.String, names, val.Type())
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullString)
+	names := destPtr.Enumerate()
+	enumIndex := 0
+	destValue := reflect.ValueOf(destPtr).Elem()
+	if scanDest.Valid {
+		enumIndex = getEnumIndex(scanDest.String, names, destValue.Type())
 	}
-	if i < 0 {
-		panic(fmt.Errorf("%q is not a valid %T", nullstring.String, dest))
+	if enumIndex < 0 {
+		panic(fmt.Errorf(callsite(skip+1)+"%q is not a valid %T", scanDest.String, destPtr))
 	}
-	switch val.Kind() {
+	switch destValue.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		val.SetInt(int64(i))
+		destValue.SetInt(int64(enumIndex))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		val.SetUint(uint64(i))
+		destValue.SetUint(uint64(enumIndex))
 	case reflect.String:
-		val.SetString(nullstring.String)
+		destValue.SetString(scanDest.String)
 	}
 }
 
 // Float64 returns the float64 value of the expression.
-func (r *Row) Float64(format string, values ...any) float64 {
-	return r.NullFloat64Field(Expr(format, values...)).Float64
+func (row *Row) Float64(format string, values ...any) float64 {
+	return row.NullFloat64Field(Expr(format, values...)).Float64
 }
 
 // Float64Field returns the float64 value of the field.
-func (r *Row) Float64Field(field Number) float64 {
-	return r.NullFloat64Field(field).Float64
+func (row *Row) Float64Field(field Number) float64 {
+	return row.NullFloat64Field(field).Float64
 }
 
 // NullFloat64 returns the sql.NullFloat64 valye of the expression.
-func (r *Row) NullFloat64(format string, values ...any) sql.NullFloat64 {
-	return r.NullFloat64Field(Expr(format, values...))
+func (row *Row) NullFloat64(format string, values ...any) sql.NullFloat64 {
+	return row.NullFloat64Field(Expr(format, values...))
 }
 
 // NullFloat64Field returns the sql.NullFloat64 value of the field.
-func (r *Row) NullFloat64Field(field Number) sql.NullFloat64 {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullFloat64{})
+func (row *Row) NullFloat64Field(field Number) sql.NullFloat64 {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &sql.NullFloat64{})
 		return sql.NullFloat64{}
 	}
-	nullfloat64 := r.dest[r.index].(*sql.NullFloat64)
-	r.index++
-	return *nullfloat64
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullFloat64)
+	return *scanDest
 }
 
 // Int returns the int value of the expression.
-func (r *Row) Int(format string, values ...any) int {
-	return int(r.NullInt64Field(Expr(format, values...)).Int64)
+func (row *Row) Int(format string, values ...any) int {
+	return int(row.NullInt64Field(Expr(format, values...)).Int64)
 }
 
 // IntField returns the int value of the field.
-func (r *Row) IntField(field Number) int {
-	return int(r.NullInt64Field(field).Int64)
+func (row *Row) IntField(field Number) int {
+	return int(row.NullInt64Field(field).Int64)
 }
 
 // Int64 returns the int64 value of the expression.
-func (r *Row) Int64(format string, values ...any) int64 {
-	return r.NullInt64Field(Expr(format, values...)).Int64
+func (row *Row) Int64(format string, values ...any) int64 {
+	return row.NullInt64Field(Expr(format, values...)).Int64
 }
 
 // Int64Field returns the int64 value of the field.
-func (r *Row) Int64Field(field Number) int64 {
-	return r.NullInt64Field(field).Int64
+func (row *Row) Int64Field(field Number) int64 {
+	return row.NullInt64Field(field).Int64
 }
 
 // NullInt64 returns the sql.NullInt64 value of the expression.
-func (r *Row) NullInt64(format string, values ...any) sql.NullInt64 {
-	return r.NullInt64Field(Expr(format, values...))
+func (row *Row) NullInt64(format string, values ...any) sql.NullInt64 {
+	return row.NullInt64Field(Expr(format, values...))
 }
 
 // NullInt64Field returns the sql.NullInt64 value of the field.
-func (r *Row) NullInt64Field(field Number) sql.NullInt64 {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullInt64{})
+func (row *Row) NullInt64Field(field Number) sql.NullInt64 {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &sql.NullInt64{})
 		return sql.NullInt64{}
 	}
-	nullint64 := r.dest[r.index].(*sql.NullInt64)
-	r.index++
-	return *nullint64
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullInt64)
+	return *scanDest
 }
 
-// JSON scans the JSON expression into dest.
-func (r *Row) JSON(dest any, format string, values ...any) {
-	r.json(dest, Expr(format, values...), 1)
+// JSON scans the JSON expression into destPtr.
+func (row *Row) JSON(destPtr any, format string, values ...any) {
+	row.json(destPtr, Expr(format, values...), 1)
 }
 
-// JSONField scans the JSON field into dest.
-func (r *Row) JSONField(dest any, field JSON) {
-	r.json(dest, field, 1)
+// JSONField scans the JSON field into destPtr.
+func (row *Row) JSONField(destPtr any, field JSON) {
+	row.json(destPtr, field, 1)
 }
 
-func (r *Row) json(dest any, field JSON, skip int) {
-	if !r.active {
-		if reflect.TypeOf(dest).Kind() != reflect.Ptr {
-			panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
+func (row *Row) json(destPtr any, field JSON, skip int) {
+	if row.sqlRows == nil {
+		if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
+			panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
 		}
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &[]byte{})
-		r.destIsString[len(r.dest)-1] = struct{}{}
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &nullBytes{
+			dialect:     row.dialect,
+			displayType: displayTypeString,
+		})
 		return
 	}
-	bptr := r.dest[r.index].(*[]byte)
-	if len(*bptr) > 0 {
-		err := json.Unmarshal(*bptr, dest)
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*nullBytes)
+	if scanDest.valid {
+		err := json.Unmarshal(scanDest.bytes, destPtr)
 		if err != nil {
 			_, file, line, _ := runtime.Caller(skip + 1)
-			panic(fmt.Errorf("%s:%d ScanJSON unmarshaling json %s into %T: %w", file, line, string(*bptr), dest, err))
+			panic(fmt.Errorf(callsite(skip+1)+"unmarshaling json %q into %T: %w", file, line, string(scanDest.bytes), destPtr, err))
 		}
 	}
-	r.index++
 }
 
 // String returns the string value of the expression.
-func (r *Row) String(format string, values ...any) string {
-	return r.NullStringField(Expr(format, values...)).String
+func (row *Row) String(format string, values ...any) string {
+	return row.NullStringField(Expr(format, values...)).String
 }
 
 // String returns the string value of the field.
-func (r *Row) StringField(field String) string {
-	return r.NullStringField(field).String
+func (row *Row) StringField(field String) string {
+	return row.NullStringField(field).String
 }
 
 // NullString returns the sql.NullString value of the expression.
-func (r *Row) NullString(format string, values ...any) sql.NullString {
-	return r.NullStringField(Expr(format, values...))
+func (row *Row) NullString(format string, values ...any) sql.NullString {
+	return row.NullStringField(Expr(format, values...))
 }
 
 // NullStringField returns the sql.NullString value of the field.
-func (r *Row) NullStringField(field String) sql.NullString {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullString{})
+func (row *Row) NullStringField(field String) sql.NullString {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &sql.NullString{})
 		return sql.NullString{}
 	}
-	nullstring := r.dest[r.index].(*sql.NullString)
-	r.index++
-	return *nullstring
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullString)
+	return *scanDest
 }
 
 // Time returns the time.Time value of the expression.
-func (r *Row) Time(format string, values ...any) time.Time {
-	return r.NullTimeField(Expr(format, values...)).Time
+func (row *Row) Time(format string, values ...any) time.Time {
+	return row.NullTimeField(Expr(format, values...)).Time
 }
 
 // Time returns the time.Time value of the field.
-func (r *Row) TimeField(field Time) time.Time {
-	return r.NullTimeField(field).Time
+func (row *Row) TimeField(field Time) time.Time {
+	return row.NullTimeField(field).Time
 }
 
 // NullTime returns the sql.NullTime value of the expression.
-func (r *Row) NullTime(format string, values ...any) sql.NullTime {
-	return r.NullTimeField(Expr(format, values...))
+func (row *Row) NullTime(format string, values ...any) sql.NullTime {
+	return row.NullTimeField(Expr(format, values...))
 }
 
 // NullTimeField returns the sql.NullTime value of the field.
-func (r *Row) NullTimeField(field Time) sql.NullTime {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		r.dest = append(r.dest, &sql.NullTime{})
+func (row *Row) NullTimeField(field Time) sql.NullTime {
+	if row.sqlRows == nil {
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &sql.NullTime{})
 		return sql.NullTime{}
 	}
-	nulltime := r.dest[r.index].(*sql.NullTime)
-	r.index++
-	return *nulltime
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*sql.NullTime)
+	return *scanDest
 }
 
-// UUID scans the UUID expression into dest.
-func (r *Row) UUID(dest any, format string, values ...any) {
-	r.uuid(dest, Expr(format, values...), 1)
+// UUID scans the UUID expression into destPtr.
+func (row *Row) UUID(destPtr any, format string, values ...any) {
+	row.uuid(destPtr, Expr(format, values...), 1)
 }
 
-// UUIDField scans the UUID field into dest.
-func (r *Row) UUIDField(dest any, field UUID) {
-	r.uuid(dest, field, 1)
+// UUIDField scans the UUID field into destPtr.
+func (row *Row) UUIDField(destPtr any, field UUID) {
+	row.uuid(destPtr, field, 1)
 }
 
-func (r *Row) uuid(dest any, field UUID, skip int) {
-	if !r.active {
-		r.fields = append(r.fields, field)
-		if reflect.TypeOf(dest).Kind() != reflect.Ptr {
-			panic(fmt.Errorf("cannot pass in non pointer value (%#v) as dest", dest))
+func (row *Row) uuid(destPtr any, field UUID, skip int) {
+	if row.sqlRows == nil {
+		if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
+			panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
 		}
-		val := reflect.Indirect(reflect.ValueOf(dest))
-		typ := val.Type()
-		if val.Kind() != reflect.Array || val.Len() != 16 || typ.Elem().Kind() != reflect.Uint8 {
-			panic(fmt.Errorf("dest %T is not a pointer to a [16]byte", dest))
+		destValue := reflect.ValueOf(destPtr).Elem()
+		if destValue.Kind() != reflect.Array || destValue.Len() != 16 || destValue.Type().Elem().Kind() != reflect.Uint8 {
+			panic(fmt.Errorf(callsite(skip+1)+"%T is not a pointer to a [16]byte", destPtr))
 		}
-		r.dest = append(r.dest, &[]byte{})
-		r.destIsUUID[len(r.dest)-1] = struct{}{}
+		row.fields = append(row.fields, field)
+		row.scanDest = append(row.scanDest, &nullBytes{
+			dialect:     row.dialect,
+			displayType: displayTypeUUID,
+		})
 		return
 	}
-	b := r.dest[r.index].(*[]byte)
+	defer func() {
+		row.index++
+	}()
+	scanDest := row.scanDest[row.index].(*nullBytes)
 	var err error
 	var uuid [16]byte
-	if len(*b) == 16 {
-		copy(uuid[:], *b)
+	if len(scanDest.bytes) == 16 {
+		copy(uuid[:], scanDest.bytes)
 	} else {
-		uuid, err = googleuuid.ParseBytes(*b)
+		uuid, err = googleuuid.ParseBytes(scanDest.bytes)
 		if err != nil {
-			panic(err)
+			panic(fmt.Errorf(callsite(skip+1)+"parsing %q as UUID string: %w", string(scanDest.bytes), err))
 		}
 	}
-	val := reflect.Indirect(reflect.ValueOf(dest))
-	for i := 0; i < 16; i++ {
-		val.Index(i).Set(reflect.ValueOf(uuid[i]))
+	if destArrayPtr, ok := destPtr.(*[16]byte); ok {
+		copy((*destArrayPtr)[:], uuid[:])
+		return
 	}
-	r.index++
+	destValue := reflect.ValueOf(destPtr).Elem()
+	for i := 0; i < 16; i++ {
+		destValue.Index(i).Set(reflect.ValueOf(uuid[i]))
+	}
 }
 
 // Column keeps track of what the values mapped to what Field in an
@@ -555,8 +659,7 @@ type Column struct {
 // Set maps the value to the Field.
 func (col *Column) Set(field Field, value any) {
 	if field == nil {
-		file, line, _ := caller(1)
-		panic(fmt.Errorf("%s:%d: setting a nil field", filepath.Base(file), line))
+		panic(fmt.Errorf(callsite(1) + "setting a nil field"))
 	}
 	// UPDATE mode
 	if col.isUpdate {
@@ -566,8 +669,7 @@ func (col *Column) Set(field Field, value any) {
 	// INSERT mode
 	name := toString(col.dialect, field)
 	if name == "" {
-		file, line, _ := caller(1)
-		panic(fmt.Errorf("%s:%d: field name is empty", filepath.Base(file), line))
+		panic(fmt.Errorf(callsite(1) + "field name is empty"))
 	}
 	if !col.rowStarted {
 		col.rowStarted = true
@@ -613,32 +715,84 @@ func (col *Column) SetString(field String, value string) { col.Set(field, value)
 // SetTime maps the time.Time value to the field.
 func (col *Column) SetTime(field Time, value time.Time) { col.Set(field, value) }
 
-// SetUUID maps the UUID value to the field, wrapped with the UUIDValue()
-// constructor.
-func (col *Column) SetUUID(field UUID, value any) { col.Set(field, UUIDValue(value)) }
-
-// SetJSON maps the JSON value to the field, wrapped with the JSONValue()
-// constructor.
-func (col *Column) SetJSON(field JSON, value any) { col.Set(field, JSONValue(value)) }
-
-// SetArray maps the array value to the field, wrapped with the ArrayValue()
-// constructor.
+// SetArray maps the array value to the field. The value should be []string,
+// []int, []int64, []int32, []float64, []float32 or []bool.
 func (col *Column) SetArray(field Array, value any) { col.Set(field, ArrayValue(value)) }
 
-// SetEnum maps the enum value to the field, wrapped with the EnumValue()
-// constructor.
+// SetEnum maps the enum value to the field.
 func (col *Column) SetEnum(field Enum, value Enumeration) { col.Set(field, EnumValue(value)) }
 
-func caller(skip int) (file string, line int, function string) {
-	/* https://talks.godoc.org/github.com/davecheney/go-1.9-release-party/presentation.slide#20
-	 * "Code that queries a single caller at a specific depth should use Caller
-	 * rather than passing a slice of length 1 to Callers."
-	 */
-	// Skip two extra frames to account for this function and runtime.Caller
-	// itself.
-	// pc, file, line, _ := runtime.Caller(skip + 2) // don't know why this is borked
-	pc, file, line, _ := runtime.Caller(skip + 1)
-	fn := runtime.FuncForPC(pc)
-	function = fn.Name()
-	return file, line, function
+// SetJSON maps the JSON value to the field. The value should be able to be
+// convertible to JSON using json.Marshal.
+func (col *Column) SetJSON(field JSON, value any) { col.Set(field, JSONValue(value)) }
+
+// SetUUID maps the UUID value to the field. The value's type or underlying
+// type should be [16]byte.
+func (col *Column) SetUUID(field UUID, value any) { col.Set(field, UUIDValue(value)) }
+
+func callsite(skip int) string {
+	_, file, line, ok := runtime.Caller(skip + 1)
+	if !ok {
+		return ""
+	}
+	return filepath.Base(file) + ":" + strconv.Itoa(line) + ": "
+}
+
+type displayType int8
+
+const (
+	displayTypeBinary displayType = iota
+	displayTypeString
+	displayTypeUUID
+)
+
+// nullBytes is used in place of scanning into *[]byte. We use *nullBytes
+// instead of *[]byte because of the displayType field, which determines how to
+// render the value to the user. This is important for logging the query
+// results, because UUIDs/JSON/Arrays are all scanned into bytes but we don't
+// want to display them as bytes (we need to convert them to UUID/JSON/Array
+// strings instead).
+type nullBytes struct {
+	bytes       []byte
+	dialect     string
+	displayType displayType
+	valid       bool
+}
+
+func (n *nullBytes) Scan(value any) error {
+	if value == nil {
+		n.bytes, n.valid = nil, false
+		return nil
+	}
+	n.valid = true
+	switch value := value.(type) {
+	case string:
+		n.bytes = []byte(value)
+	case []byte:
+		n.bytes = value
+	default:
+		return fmt.Errorf("unable to convert %#v to bytes", value)
+	}
+	return nil
+}
+
+func (n *nullBytes) Value() (driver.Value, error) {
+	if !n.valid {
+		return nil, nil
+	}
+	switch n.displayType {
+	case displayTypeString:
+		return string(n.bytes), nil
+	case displayTypeUUID:
+		if n.dialect != "postgres" {
+			return n.bytes, nil
+		}
+		var uuid [16]byte
+		var buf [36]byte
+		copy(uuid[:], n.bytes)
+		googleuuid.EncodeHex(buf[:], uuid)
+		return string(buf[:]), nil
+	default:
+		return n.bytes, nil
+	}
 }

@@ -161,10 +161,11 @@ func WriteValue(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]
 	if isExpandableSlice(value) {
 		return expandSlice(ctx, dialect, buf, args, params, value)
 	}
-	err := appendArg(ctx, dialect, buf, args, params, value)
+	value, err := preprocessValue(dialect, value)
 	if err != nil {
 		return err
 	}
+	*args = append(*args, value)
 	index := len(*args) - 1
 	switch dialect {
 	case DialectPostgres, DialectSQLite:
@@ -423,7 +424,55 @@ func Sprint(dialect string, v any) (string, error) {
 			return `x'` + hex.EncodeToString(v) + `'`, nil
 		}
 	case string:
-		return `'` + EscapeQuote(v, '\'') + `'`, nil
+		str := v
+		i := strings.IndexAny(str, "\r\n")
+		if i < 0 {
+			return `'` + strings.ReplaceAll(str, `'`, `''`) + `'`, nil
+		}
+		var b strings.Builder
+		if dialect == DialectMySQL || dialect == DialectSQLServer {
+			b.WriteString("CONCAT(")
+		}
+		for i >= 0 {
+			if str[:i] != "" {
+				b.WriteString(`'` + strings.ReplaceAll(str[:i], `'`, `''`) + `'`)
+				if dialect == DialectMySQL || dialect == DialectSQLServer {
+					b.WriteString(", ")
+				} else {
+					b.WriteString(" || ")
+				}
+			}
+			switch str[i] {
+			case '\r':
+				if dialect == DialectPostgres {
+					b.WriteString("CHR(13)")
+				} else {
+					b.WriteString("CHAR(13)")
+				}
+			case '\n':
+				if dialect == DialectPostgres {
+					b.WriteString("CHR(10)")
+				} else {
+					b.WriteString("CHAR(10)")
+				}
+			}
+			if str[i+1:] != "" {
+				if dialect == DialectMySQL || dialect == DialectSQLServer {
+					b.WriteString(", ")
+				} else {
+					b.WriteString(" || ")
+				}
+			}
+			str = str[i+1:]
+			i = strings.IndexAny(str, "\r\n")
+		}
+		if str != "" {
+			b.WriteString(`'` + strings.ReplaceAll(str, `'`, `''`) + `'`)
+		}
+		if dialect == DialectMySQL || dialect == DialectSQLServer {
+			b.WriteString(")")
+		}
+		return b.String(), nil
 	case time.Time:
 		if dialect == DialectPostgres || dialect == DialectSQLServer {
 			return `'` + v.Format(timestampWithTimezone) + `'`, nil
@@ -517,10 +566,10 @@ func Sprint(dialect string, v any) (string, error) {
 		}
 	}
 	switch v := rv.Interface().(type) {
-	case bool, []byte, string, time.Time,
-		int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64:
+	case bool, []byte, string, time.Time, int, int8, int16, int32, int64, uint,
+		uint8, uint16, uint32, uint64, float32, float64, sql.NamedArg,
+		sql.NullBool, sql.NullFloat64, sql.NullInt64, sql.NullInt32,
+		sql.NullString, sql.NullTime, driver.Valuer:
 		return Sprint(dialect, v)
 	default:
 		return "", fmt.Errorf("%T has no SQL representation", v)
@@ -549,8 +598,8 @@ func expandSlice(ctx context.Context, dialect string, buf *bytes.Buffer, args *[
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		v := slice.Index(i).Interface()
-		if v, ok := v.(SQLWriter); ok {
+		arg := slice.Index(i).Interface()
+		if v, ok := arg.(SQLWriter); ok {
 			err = v.WriteSQL(ctx, dialect, buf, args, params)
 			if err != nil {
 				return err
@@ -565,10 +614,11 @@ func expandSlice(ctx context.Context, dialect string, buf *bytes.Buffer, args *[
 		default:
 			buf.WriteString("?")
 		}
-		err = appendArg(ctx, dialect, buf, args, params, v)
+		arg, err = preprocessValue(dialect, arg)
 		if err != nil {
 			return err
 		}
+		*args = append(*args, arg)
 	}
 	return nil
 }
@@ -580,6 +630,11 @@ func writeNamedArg(ctx context.Context, dialect string, buf *bytes.Buffer, args 
 	}
 	if isExpandableSlice(namedArg.Value) {
 		return expandSlice(ctx, dialect, buf, args, params, namedArg.Value)
+	}
+	var err error
+	namedArg.Value, err = preprocessValue(dialect, namedArg.Value)
+	if err != nil {
+		return err
 	}
 	paramIndices := params[namedArg.Name]
 	if len(paramIndices) > 0 {
@@ -603,43 +658,30 @@ func writeNamedArg(ctx context.Context, dialect string, buf *bytes.Buffer, args 
 			}
 		}
 	}
-	var err error
 	switch dialect {
 	case DialectSQLite:
-		err = appendArg(ctx, dialect, buf, args, params, namedArg)
-		if err != nil {
-			return err
-		}
+		*args = append(*args, namedArg)
 		if params != nil {
 			index := len(*args) - 1
 			params[namedArg.Name] = []int{index}
 		}
 		buf.WriteString("$" + namedArg.Name)
 	case DialectPostgres:
-		err = appendArg(ctx, dialect, buf, args, params, namedArg.Value)
-		if err != nil {
-			return err
-		}
+		*args = append(*args, namedArg.Value)
 		index := len(*args) - 1
 		if params != nil {
 			params[namedArg.Name] = []int{index}
 		}
 		buf.WriteString("$" + strconv.Itoa(index+1))
 	case DialectSQLServer:
-		err = appendArg(ctx, dialect, buf, args, params, namedArg)
-		if err != nil {
-			return err
-		}
+		*args = append(*args, namedArg)
 		if params != nil {
 			index := len(*args) - 1
 			params[namedArg.Name] = []int{index}
 		}
 		buf.WriteString("@" + namedArg.Name)
 	default:
-		err = appendArg(ctx, dialect, buf, args, params, namedArg.Value)
-		if err != nil {
-			return err
-		}
+		*args = append(*args, namedArg.Value)
 		if params != nil {
 			index := len(*args) - 1
 			params[namedArg.Name] = append(paramIndices, index)
@@ -671,10 +713,7 @@ func writeOrdinalValue(ctx context.Context, dialect string, buf *bytes.Buffer, a
 	case DialectSQLite, DialectPostgres, DialectSQLServer:
 		index, ok := ordinalIndices[ordinal]
 		if !ok {
-			err := appendArg(ctx, dialect, buf, args, params, value)
-			if err != nil {
-				return err
-			}
+			*args = append(*args, value)
 			index = len(*args) - 1
 			ordinalIndices[ordinal] = index
 		}
@@ -690,39 +729,6 @@ func writeOrdinalValue(ctx context.Context, dialect string, buf *bytes.Buffer, a
 			return err
 		}
 	}
-	return nil
-}
-
-// appendArg appends an arg into args, but first checks if the arg is a
-// DialectValuer in which case it calls the DialectValuer method first.
-func appendArg(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int, arg any) error {
-	// If sql.NamedArg, check sql.NamedArg.Value instead of sql.NamedArg
-	// directly.
-	if namedArg, ok := arg.(sql.NamedArg); ok {
-		dialectValuer, ok := namedArg.Value.(DialectValuer)
-		if !ok {
-			*args = append(*args, namedArg)
-			return nil
-		}
-		valuer, err := dialectValuer.DialectValuer(dialect)
-		if err != nil {
-			return err
-		}
-		namedArg.Value = valuer
-		*args = append(*args, namedArg)
-		return nil
-	}
-
-	dialectValuer, ok := arg.(DialectValuer)
-	if !ok {
-		*args = append(*args, arg)
-		return nil
-	}
-	valuer, err := dialectValuer.DialectValuer(dialect)
-	if err != nil {
-		return err
-	}
-	*args = append(*args, valuer)
 	return nil
 }
 

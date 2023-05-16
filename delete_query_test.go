@@ -187,6 +187,29 @@ func TestMySQLDeleteQuery(t *testing.T) {
 		tt.wantArgs = []any{1}
 		tt.assert(t)
 	})
+
+	t.Run("Join", func(t *testing.T) {
+		t.Parallel()
+		var tt TestTable
+		tt.item = MySQL.
+			Delete(a).
+			From(a).
+			Join(a, Expr("1 = 1")).
+			LeftJoin(a, Expr("1 = 1")).
+			FullJoin(a, Expr("1 = 1")).
+			CrossJoin(a).
+			CustomJoin(",", a).
+			JoinUsing(a, a.FIRST_NAME, a.LAST_NAME)
+		tt.wantQuery = "DELETE actor" +
+			" FROM actor" +
+			" JOIN actor ON 1 = 1" +
+			" LEFT JOIN actor ON 1 = 1" +
+			" FULL JOIN actor ON 1 = 1" +
+			" CROSS JOIN actor" +
+			" , actor" +
+			" JOIN actor USING (first_name, last_name)"
+		tt.assert(t)
+	})
 }
 
 func TestSQLServerDeleteQuery(t *testing.T) {

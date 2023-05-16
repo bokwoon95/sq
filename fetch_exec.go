@@ -6,227 +6,198 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
+)
 
-	"github.com/bokwoon95/sq/internal/googleuuid"
+var (
+	errMixedCalls       = fmt.Errorf("rowmapper cannot mix calls to row.Values()/row.Columns()/row.ColumnTypes() with the other row methods")
+	errNoFieldsAccessed = fmt.Errorf("rowmapper did not access any fields, unable to determine fields to insert into query")
+	errForbiddenCalls   = fmt.Errorf("rowmapper can only contain calls to row.Values()/row.Columns()/row.ColumnTypes() because query's SELECT clause is not dynamic")
 )
 
 // A Cursor represents a database cursor.
 type Cursor[T any] struct {
-	ctx         context.Context
-	row         *Row
-	sqlRows     *sql.Rows
-	rowmapper   func(*Row) T
-	stats       QueryStats
-	logSettings LogSettings
-	logger      SqLogger
-	logged      int32
-	fieldNames  []string
-	resultsBuf  *bytes.Buffer
+	ctx           context.Context
+	row           *Row
+	rowmapper     func(*Row) T
+	queryStats    QueryStats
+	logSettings   LogSettings
+	logger        SqLogger
+	logged        int32
+	fieldNames    []string
+	resultsBuffer *bytes.Buffer
 }
 
 // FetchCursor returns a new cursor.
-func FetchCursor[T any](db DB, q Query, rowmapper func(*Row) T) (*Cursor[T], error) {
-	return fetchCursor(context.Background(), db, q, rowmapper, 1)
+func FetchCursor[T any](db DB, query Query, rowmapper func(*Row) T) (*Cursor[T], error) {
+	return fetchCursor(context.Background(), db, query, rowmapper, 1)
 }
 
 // FetchCursorContext is like FetchCursor but additionally requires a context.Context.
-func FetchCursorContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) (*Cursor[T], error) {
-	return fetchCursor(ctx, db, q, rowmapper, 1)
+func FetchCursorContext[T any](ctx context.Context, db DB, query Query, rowmapper func(*Row) T) (*Cursor[T], error) {
+	return fetchCursor(ctx, db, query, rowmapper, 1)
 }
 
-func fetchCursor[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T, skip int) (c *Cursor[T], err error) {
+func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(*Row) T, skip int) (cursor *Cursor[T], err error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
-	if q == nil {
+	if query == nil {
 		return nil, fmt.Errorf("query is nil")
 	}
 	if rowmapper == nil {
 		return nil, fmt.Errorf("rowmapper is nil")
 	}
-	c = &Cursor[T]{ctx: ctx, rowmapper: rowmapper}
-
-	// Get fields and dest from rowmapper
-	dialect := q.GetDialect()
-	c.row = newRow(dialect)
-	defer recoverPanic(&err)
-	_ = c.rowmapper(c.row)
-	c.row.active = true
-	if len(c.row.fields) == 0 || len(c.row.dest) == 0 {
-		return nil, fmt.Errorf("rowmapper did not yield any fields")
+	dialect := query.GetDialect()
+	cursor = &Cursor[T]{
+		ctx:       ctx,
+		rowmapper: rowmapper,
+		row: &Row{
+			dialect: dialect,
+		},
+		queryStats: QueryStats{
+			Dialect:  dialect,
+			RowCount: sql.NullInt64{Valid: true},
+			Params:   make(map[string][]int),
+		},
 	}
+
+	// Call the rowmapper to populate row.fields and row.scanDest.
+	defer mapperFunctionPanicked(&err)
+	_ = cursor.rowmapper(cursor.row)
 	var ok bool
-	q, ok = q.SetFetchableFields(c.row.fields)
-	if !ok {
-		return nil, fmt.Errorf("query does not support setting fetchable fields")
+	if cursor.row.rawSQLMode && len(cursor.row.fields) > 0 {
+		return nil, errMixedCalls
 	}
 
-	// Setup logger
-	c.stats.RowCount.Valid = true
-	if c.logger, ok = db.(SqLogger); ok {
-		c.logger.SqLogSettings(ctx, &c.logSettings)
-		if c.logSettings.IncludeCaller {
-			c.stats.CallerFile, c.stats.CallerLine, c.stats.CallerFunction = caller(skip + 1)
+	// Insert the fields into the query.
+	query, ok = query.SetFetchableFields(cursor.row.fields)
+	if ok && len(cursor.row.fields) == 0 {
+		return nil, errNoFieldsAccessed
+	}
+	if !ok && len(cursor.row.fields) > 0 {
+		return nil, errForbiddenCalls
+	}
+
+	// Build query.
+	buf := bufpool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufpool.Put(buf)
+	err = query.WriteSQL(ctx, dialect, buf, &cursor.queryStats.Args, cursor.queryStats.Params)
+	cursor.queryStats.Query = buf.String()
+	if err != nil {
+		return nil, err
+	}
+
+	// Setup logger.
+	if cursor.logger, ok = db.(SqLogger); ok {
+		cursor.logger.SqLogSettings(ctx, &cursor.logSettings)
+		if cursor.logSettings.IncludeCaller {
+			cursor.queryStats.CallerFile, cursor.queryStats.CallerLine, cursor.queryStats.CallerFunction = caller(skip + 1)
 		}
 	}
 
-	// Build query
-	c.stats.Params = make(map[string][]int)
-	c.stats.Query, c.stats.Args, c.stats.Err = ToSQLContext(ctx, dialect, q, c.stats.Params)
-	if c.stats.Err != nil {
-		c.log()
-		return nil, c.stats.Err
+	// Run query.
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.StartedAt = time.Now()
+	}
+	cursor.row.sqlRows, cursor.queryStats.Err = db.QueryContext(ctx, cursor.queryStats.Query, cursor.queryStats.Args...)
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.TimeTaken = time.Since(cursor.queryStats.StartedAt)
+	}
+	if cursor.queryStats.Err != nil {
+		cursor.log()
+		return nil, cursor.queryStats.Err
 	}
 
-	// Run query
-	if c.logSettings.IncludeTime {
-		c.stats.StartedAt = time.Now()
+	// Allocate the resultsBuffer.
+	if cursor.logSettings.IncludeResults > 0 {
+		cursor.resultsBuffer = bufpool.Get().(*bytes.Buffer)
+		cursor.resultsBuffer.Reset()
 	}
-	c.sqlRows, c.stats.Err = db.QueryContext(ctx, c.stats.Query, c.stats.Args...)
-	if c.logSettings.IncludeTime {
-		c.stats.TimeTaken = time.Since(c.stats.StartedAt)
-	}
-	if c.stats.Err != nil {
-		c.log()
-		return nil, c.stats.Err
-	}
-
-	// Allocate resultsBuf
-	if c.logSettings.IncludeResults > 0 {
-		c.resultsBuf = bufpool.Get().(*bytes.Buffer)
-		c.resultsBuf.Reset()
-	}
-	return c, nil
+	return cursor, nil
 }
 
 // Next advances the cursor to the next result.
-func (c *Cursor[T]) Next() bool {
-	hasNext := c.sqlRows.Next()
+func (cursor *Cursor[T]) Next() bool {
+	hasNext := cursor.row.sqlRows.Next()
 	if hasNext {
-		c.stats.RowCount.Int64++
+		cursor.queryStats.RowCount.Int64++
 	} else {
-		c.log()
+		cursor.log()
 	}
 	return hasNext
 }
 
 // RowCount returns the current row number so far.
-func (c *Cursor[T]) RowCount() int64 { return c.stats.RowCount.Int64 }
+func (cursor *Cursor[T]) RowCount() int64 { return cursor.queryStats.RowCount.Int64 }
 
 // Result returns the cursor result.
-func (c *Cursor[T]) Result() (result T, err error) {
-	c.stats.Err = c.sqlRows.Scan(c.row.dest...)
-	// If scan returns an error, annotate the error with the fields and dest
-	// types so the user can see what went wrong.
-	if c.stats.Err != nil {
-		c.log()
-		errbuf := bufpool.Get().(*bytes.Buffer)
-		errbuf.Reset()
-		defer bufpool.Put(errbuf)
-		buf := bufpool.Get().(*bytes.Buffer)
-		buf.Reset()
-		defer bufpool.Put(buf)
-		args := new([]any)
-		for i := range c.row.dest {
-			errbuf.WriteString("\n" + strconv.Itoa(i) + ") ")
-			errbuf.Reset()
-			*args = (*args)[:0]
-			err := c.row.fields[i].WriteSQL(c.ctx, c.stats.Dialect, buf, args, nil)
-			if err != nil {
-				errbuf.WriteString("%!(error=" + err.Error() + ")")
-				continue
-			}
-			lhs, err := Sprintf(c.stats.Dialect, errbuf.String(), *args)
-			if err != nil {
-				errbuf.WriteString("%!(error=" + err.Error() + ")")
-				continue
-			}
-			errbuf.WriteString(lhs + " => " + reflect.TypeOf(c.row.dest[i]).String())
-		}
-		return result, fmt.Errorf("please check if your mapper function is correct:%s\n%w", errbuf.String(), err)
-	}
-	// If results should be logged, write the row into the resultsBuf.
-	if c.resultsBuf != nil && c.stats.RowCount.Int64 <= int64(c.logSettings.IncludeResults) {
-		if len(c.fieldNames) == 0 {
-			c.fieldNames = getFieldNames(c.ctx, c.stats.Dialect, c.row.fields)
-		}
-		c.resultsBuf.WriteString("\n----[ Row " + strconv.FormatInt(c.stats.RowCount.Int64, 10) + " ]----")
-		for i := range c.row.dest {
-			c.resultsBuf.WriteString("\n")
-			if i < len(c.fieldNames) {
-				c.resultsBuf.WriteString(c.fieldNames[i])
-			}
-			c.resultsBuf.WriteString(": ")
-			destValue := c.row.dest[i]
-			if _, ok := c.row.destIsString[i]; ok {
-				if b, ok := c.row.dest[i].(*[]byte); ok {
-					if len(*b) > 0 {
-						destValue = string(*b)
-					} else {
-						destValue = nil
-					}
-				}
-			} else if c.stats.Dialect == DialectPostgres {
-				if _, ok := c.row.destIsUUID[i]; ok {
-					if b, ok := c.row.dest[i].(*[]byte); ok {
-						if len(*b) > 0 {
-							var uuid [16]byte
-							var buf [36]byte
-							copy(uuid[:], *b)
-							googleuuid.EncodeHex(buf[:], uuid)
-							destValue = string(buf[:])
-						} else {
-							destValue = nil
-						}
-					}
-				}
-			}
-			rhs, err := Sprint(c.stats.Dialect, destValue)
-			if err != nil {
-				c.resultsBuf.WriteString("%!(error=" + err.Error() + ")")
-				continue
-			}
-			c.resultsBuf.WriteString(rhs)
+func (cursor *Cursor[T]) Result() (result T, err error) {
+	if !cursor.row.rawSQLMode {
+		err = cursor.row.sqlRows.Scan(cursor.row.scanDest...)
+		if err != nil {
+			cursor.log()
+			fieldMappings := getFieldMappings(cursor.queryStats.Dialect, cursor.row.fields, cursor.row.scanDest)
+			return result, fmt.Errorf("please check if your mapper function is correct:%s\n%w", fieldMappings, err)
 		}
 	}
-	c.row.index = 0
-	defer recoverPanic(&err)
-	result = c.rowmapper(c.row)
-	if c.stats.Err != nil {
-		c.log()
-		return result, c.stats.Err
+	// If results should be logged, write the row into the resultsBuffer.
+	if cursor.resultsBuffer != nil && cursor.queryStats.RowCount.Int64 <= int64(cursor.logSettings.IncludeResults) {
+		if len(cursor.fieldNames) == 0 {
+			cursor.fieldNames = getFieldNames(cursor.ctx, cursor.row)
+		}
+		cursor.resultsBuffer.WriteString("\n----[ Row " + strconv.FormatInt(cursor.queryStats.RowCount.Int64, 10) + " ]----")
+		for i := range cursor.row.scanDest {
+			cursor.resultsBuffer.WriteString("\n")
+			if i < len(cursor.fieldNames) {
+				cursor.resultsBuffer.WriteString(cursor.fieldNames[i])
+			}
+			cursor.resultsBuffer.WriteString(": ")
+			scanDest := cursor.row.scanDest[i]
+			rhs, err := Sprint(cursor.queryStats.Dialect, scanDest)
+			if err != nil {
+				cursor.resultsBuffer.WriteString("%!(error=" + err.Error() + ")")
+				continue
+			}
+			cursor.resultsBuffer.WriteString(rhs)
+		}
 	}
+	cursor.row.index = 0
+	defer mapperFunctionPanicked(&err)
+	result = cursor.rowmapper(cursor.row)
 	return result, nil
 }
 
-func (c *Cursor[T]) log() {
-	if !atomic.CompareAndSwapInt32(&c.logged, 0, 1) {
+func (cursor *Cursor[T]) log() {
+	if !atomic.CompareAndSwapInt32(&cursor.logged, 0, 1) {
 		return
 	}
-	if c.resultsBuf != nil {
-		c.stats.Results = c.resultsBuf.String()
-		bufpool.Put(c.resultsBuf)
+	if cursor.resultsBuffer != nil {
+		cursor.queryStats.Results = cursor.resultsBuffer.String()
+		bufpool.Put(cursor.resultsBuffer)
 	}
-	if c.logger == nil {
+	if cursor.logger == nil {
 		return
 	}
-	if c.logSettings.LogAsynchronously {
-		go c.logger.SqLogQuery(c.ctx, c.stats)
+	if cursor.logSettings.LogAsynchronously {
+		go cursor.logger.SqLogQuery(cursor.ctx, cursor.queryStats)
 	} else {
-		c.logger.SqLogQuery(c.ctx, c.stats)
+		cursor.logger.SqLogQuery(cursor.ctx, cursor.queryStats)
 	}
 }
 
 // Close closes the cursor.
-func (c *Cursor[T]) Close() error {
-	c.log()
-	if err := c.sqlRows.Close(); err != nil {
+func (cursor *Cursor[T]) Close() error {
+	cursor.log()
+	if err := cursor.row.sqlRows.Close(); err != nil {
 		return err
 	}
-	if err := c.sqlRows.Err(); err != nil {
+	if err := cursor.row.sqlRows.Err(); err != nil {
 		return err
 	}
 	return nil
@@ -234,8 +205,8 @@ func (c *Cursor[T]) Close() error {
 
 // FetchOne returns the first result from running the given Query on the given
 // DB.
-func FetchOne[T any](db DB, q Query, rowmapper func(*Row) T) (T, error) {
-	cursor, err := fetchCursor(context.Background(), db, q, rowmapper, 1)
+func FetchOne[T any](db DB, query Query, rowmapper func(*Row) T) (T, error) {
+	cursor, err := fetchCursor(context.Background(), db, query, rowmapper, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -244,8 +215,8 @@ func FetchOne[T any](db DB, q Query, rowmapper func(*Row) T) (T, error) {
 }
 
 // FetchOneContext is like FetchOne but additionally requires a context.Context.
-func FetchOneContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) (T, error) {
-	cursor, err := fetchCursor(ctx, db, q, rowmapper, 1)
+func FetchOneContext[T any](ctx context.Context, db DB, query Query, rowmapper func(*Row) T) (T, error) {
+	cursor, err := fetchCursor(ctx, db, query, rowmapper, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -254,8 +225,8 @@ func FetchOneContext[T any](ctx context.Context, db DB, q Query, rowmapper func(
 }
 
 // FetchAll returns all results from running the given Query on the given DB.
-func FetchAll[T any](db DB, q Query, rowmapper func(*Row) T) ([]T, error) {
-	cursor, err := fetchCursor(context.Background(), db, q, rowmapper, 1)
+func FetchAll[T any](db DB, query Query, rowmapper func(*Row) T) ([]T, error) {
+	cursor, err := fetchCursor(context.Background(), db, query, rowmapper, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -264,8 +235,8 @@ func FetchAll[T any](db DB, q Query, rowmapper func(*Row) T) ([]T, error) {
 }
 
 // FetchAllContext is like FetchAll but additionally requires a context.Context.
-func FetchAllContext[T any](ctx context.Context, db DB, q Query, rowmapper func(*Row) T) ([]T, error) {
-	cursor, err := fetchCursor(ctx, db, q, rowmapper, 1)
+func FetchAllContext[T any](ctx context.Context, db DB, query Query, rowmapper func(*Row) T) ([]T, error) {
+	cursor, err := fetchCursor(ctx, db, query, rowmapper, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -299,117 +270,128 @@ func CompileFetch[T any](q Query, rowmapper func(*Row) T) (*CompiledFetch[T], er
 	return CompileFetchContext(context.Background(), q, rowmapper)
 }
 
-// CompileFetchContext is like CompileFetch but accpets a context.Context.
-func CompileFetchContext[T any](ctx context.Context, q Query, rowmapper func(*Row) T) (f *CompiledFetch[T], err error) {
-	if q == nil {
+// CompileFetchContext is like CompileFetch but accepts a context.Context.
+func CompileFetchContext[T any](ctx context.Context, query Query, rowmapper func(*Row) T) (compiledFetch *CompiledFetch[T], err error) {
+	if query == nil {
 		return nil, fmt.Errorf("query is nil")
 	}
 	if rowmapper == nil {
 		return nil, fmt.Errorf("rowmapper is nil")
 	}
+	dialect := query.GetDialect()
+	compiledFetch = &CompiledFetch[T]{
+		dialect:   dialect,
+		params:    make(map[string][]int),
+		rowmapper: rowmapper,
+	}
+	row := &Row{
+		dialect: dialect,
+	}
 
-	// Get fields from rowmapper
-	dialect := q.GetDialect()
-	row := newRow(dialect)
-	defer recoverPanic(&err)
+	// Call the rowmapper to populate row.fields.
+	defer mapperFunctionPanicked(&err)
 	_ = rowmapper(row)
-	if len(row.fields) == 0 {
-		return nil, fmt.Errorf("rowmapper did not yield any fields")
-	}
 	var ok bool
-	q, ok = q.SetFetchableFields(row.fields)
-	if !ok {
-		return nil, fmt.Errorf("query does not support setting fetchable fields")
+	if row.rawSQLMode && len(row.fields) > 0 {
+		return nil, errMixedCalls
 	}
 
-	// Build query
-	f = &CompiledFetch[T]{}
-	f.rowmapper = rowmapper
-	f.params = make(map[string][]int)
-	f.query, f.args, err = ToSQLContext(ctx, dialect, q, f.params)
-	if err != nil {
-		return f, err
+	// Insert the fields into the query.
+	query, ok = query.SetFetchableFields(row.fields)
+	if ok && len(row.fields) == 0 {
+		return nil, errNoFieldsAccessed
 	}
-	return f, nil
+	if !ok && len(row.fields) > 0 {
+		return nil, errForbiddenCalls
+	}
+
+	// Build query.
+	buf := bufpool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufpool.Put(buf)
+	err = query.WriteSQL(ctx, dialect, buf, &compiledFetch.args, compiledFetch.params)
+	compiledFetch.query = buf.String()
+	if err != nil {
+		return nil, err
+	}
+	return compiledFetch, nil
 }
 
 // FetchCursor returns a new cursor.
-func (f *CompiledFetch[T]) FetchCursor(db DB, params Params) (*Cursor[T], error) {
-	return f.fetchCursor(context.Background(), db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchCursor(db DB, params Params) (*Cursor[T], error) {
+	return compiledFetch.fetchCursor(context.Background(), db, params, 1)
 }
 
 // FetchCursorContext is like FetchCursor but additionally requires a context.Context.
-func (f *CompiledFetch[T]) FetchCursorContext(ctx context.Context, db DB, params Params) (*Cursor[T], error) {
-	return f.fetchCursor(ctx, db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchCursorContext(ctx context.Context, db DB, params Params) (*Cursor[T], error) {
+	return compiledFetch.fetchCursor(ctx, db, params, 1)
 }
 
-func (f *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, params Params, skip int) (c *Cursor[T], err error) {
+func (compiledFetch *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, params Params, skip int) (cursor *Cursor[T], err error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
-	c = &Cursor[T]{
-		ctx: ctx,
-		stats: QueryStats{
-			Dialect: f.dialect,
-			Query:   f.query,
-			Args:    f.args,
-			Params:  f.params,
+	cursor = &Cursor[T]{
+		ctx:       ctx,
+		rowmapper: compiledFetch.rowmapper,
+		row: &Row{
+			dialect: compiledFetch.dialect,
 		},
-		rowmapper: f.rowmapper,
+		queryStats: QueryStats{
+			Dialect: compiledFetch.dialect,
+			Query:   compiledFetch.query,
+			Args:    compiledFetch.args,
+			Params:  compiledFetch.params,
+		},
 	}
 
-	// Get fields and dest from rowmapper
-	c.row = newRow(f.dialect)
-	defer recoverPanic(&err)
-	_ = c.rowmapper(c.row)
-	if err != nil {
-		return nil, err
-	}
-	c.row.active = true
-	if len(c.row.fields) == 0 || len(c.row.dest) == 0 {
-		return nil, fmt.Errorf("rowmapper did not yield any fields")
-	}
-
-	// Substitute params
-	c.stats.Args, err = substituteParams(c.stats.Dialect, c.stats.Args, c.stats.Params, params)
+	// Call the rowmapper to populate row.scanDest.
+	defer mapperFunctionPanicked(&err)
+	_ = cursor.rowmapper(cursor.row)
 	if err != nil {
 		return nil, err
 	}
 
-	// Setup logger
+	// Substitute params.
+	cursor.queryStats.Args, err = substituteParams(cursor.queryStats.Dialect, cursor.queryStats.Args, cursor.queryStats.Params, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Setup logger.
 	var ok bool
-	c.stats.RowCount.Valid = true
-	if c.logger, ok = db.(SqLogger); ok {
-		c.logger.SqLogSettings(ctx, &c.logSettings)
-		if c.logSettings.IncludeCaller {
-			c.stats.CallerFile, c.stats.CallerLine, c.stats.CallerFunction = caller(skip + 1)
+	cursor.queryStats.RowCount.Valid = true
+	if cursor.logger, ok = db.(SqLogger); ok {
+		cursor.logger.SqLogSettings(ctx, &cursor.logSettings)
+		if cursor.logSettings.IncludeCaller {
+			cursor.queryStats.CallerFile, cursor.queryStats.CallerLine, cursor.queryStats.CallerFunction = caller(skip + 1)
 		}
 	}
 
-	// Run query
-	if c.logSettings.IncludeTime {
-		c.stats.StartedAt = time.Now()
+	// Run query.
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.StartedAt = time.Now()
 	}
-	c.sqlRows, c.stats.Err = db.QueryContext(ctx, c.stats.Query, c.stats.Args...)
-	if c.logSettings.IncludeTime {
-		c.stats.TimeTaken = time.Since(c.stats.StartedAt)
+	cursor.row.sqlRows, cursor.queryStats.Err = db.QueryContext(ctx, cursor.queryStats.Query, cursor.queryStats.Args...)
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.TimeTaken = time.Since(cursor.queryStats.StartedAt)
 	}
-	if c.stats.Err != nil {
-		return nil, c.stats.Err
+	if cursor.queryStats.Err != nil {
+		return nil, cursor.queryStats.Err
 	}
 
-	// Allocate resultsBuf
-	if c.logSettings.IncludeResults > 0 {
-		c.resultsBuf = bufpool.Get().(*bytes.Buffer)
-		c.resultsBuf.Reset()
+	// Allocate the resultsBuffer.
+	if cursor.logSettings.IncludeResults > 0 {
+		cursor.resultsBuffer = bufpool.Get().(*bytes.Buffer)
+		cursor.resultsBuffer.Reset()
 	}
-	return c, nil
+	return cursor, nil
 }
 
 // FetchOne returns the first result from running the CompiledFetch on the
 // given DB with the give params.
-func (f *CompiledFetch[T]) FetchOne(db DB, params Params) (T, error) {
-	cursor, err := f.fetchCursor(context.Background(), db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchOne(db DB, params Params) (T, error) {
+	cursor, err := compiledFetch.fetchCursor(context.Background(), db, params, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -418,8 +400,8 @@ func (f *CompiledFetch[T]) FetchOne(db DB, params Params) (T, error) {
 }
 
 // FetchOneContext is like FetchOne but additionally requires a context.Context.
-func (f *CompiledFetch[T]) FetchOneContext(ctx context.Context, db DB, params Params) (T, error) {
-	cursor, err := f.fetchCursor(ctx, db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchOneContext(ctx context.Context, db DB, params Params) (T, error) {
+	cursor, err := compiledFetch.fetchCursor(ctx, db, params, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -429,8 +411,8 @@ func (f *CompiledFetch[T]) FetchOneContext(ctx context.Context, db DB, params Pa
 
 // FetchAll returns all the results from running the CompiledFetch on the given
 // DB with the give params.
-func (f *CompiledFetch[T]) FetchAll(db DB, params Params) ([]T, error) {
-	cursor, err := f.fetchCursor(context.Background(), db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchAll(db DB, params Params) ([]T, error) {
+	cursor, err := compiledFetch.fetchCursor(context.Background(), db, params, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -439,8 +421,8 @@ func (f *CompiledFetch[T]) FetchAll(db DB, params Params) ([]T, error) {
 }
 
 // FetchAllContext is like FetchAll but additionally requires a context.Context.
-func (f *CompiledFetch[T]) FetchAllContext(ctx context.Context, db DB, params Params) ([]T, error) {
-	cursor, err := f.fetchCursor(ctx, db, params, 1)
+func (compiledFetch *CompiledFetch[T]) FetchAllContext(ctx context.Context, db DB, params Params) ([]T, error) {
+	cursor, err := compiledFetch.fetchCursor(ctx, db, params, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -450,48 +432,48 @@ func (f *CompiledFetch[T]) FetchAllContext(ctx context.Context, db DB, params Pa
 
 // GetSQL returns a copy of the dialect, query, args, params and rowmapper that
 // make up the CompiledFetch.
-func (f *CompiledFetch[T]) GetSQL() (dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) T) {
-	dialect = f.dialect
-	query = f.query
-	args = make([]any, len(f.args))
+func (compiledFetch *CompiledFetch[T]) GetSQL() (dialect string, query string, args []any, params map[string][]int, rowmapper func(*Row) T) {
+	dialect = compiledFetch.dialect
+	query = compiledFetch.query
+	args = make([]any, len(compiledFetch.args))
 	params = make(map[string][]int)
-	copy(args, f.args)
-	for name, indexes := range f.params {
+	copy(args, compiledFetch.args)
+	for name, indexes := range compiledFetch.params {
 		indexes2 := make([]int, len(indexes))
 		copy(indexes2, indexes)
 		params[name] = indexes2
 	}
-	return dialect, query, args, params, f.rowmapper
+	return dialect, query, args, params, compiledFetch.rowmapper
 }
 
 // Prepare creates a PreparedFetch from a CompiledFetch by preparing it on
 // the given DB.
-func (f *CompiledFetch[T]) Prepare(db DB) (*PreparedFetch[T], error) {
-	return f.PrepareContext(context.Background(), db)
+func (compiledFetch *CompiledFetch[T]) Prepare(db DB) (*PreparedFetch[T], error) {
+	return compiledFetch.PrepareContext(context.Background(), db)
 }
 
 // PrepareContext is like Prepare but additionally requires a context.Context.
-func (f *CompiledFetch[T]) PrepareContext(ctx context.Context, db DB) (*PreparedFetch[T], error) {
+func (compiledFetch *CompiledFetch[T]) PrepareContext(ctx context.Context, db DB) (*PreparedFetch[T], error) {
 	var err error
-	pf := &PreparedFetch[T]{
-		compiled: NewCompiledFetch(f.GetSQL()),
+	preparedFetch := &PreparedFetch[T]{
+		compiledFetch: NewCompiledFetch(compiledFetch.GetSQL()),
 	}
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
-	pf.stmt, err = db.PrepareContext(ctx, f.query)
+	preparedFetch.stmt, err = db.PrepareContext(ctx, compiledFetch.query)
 	if err != nil {
 		return nil, err
 	}
-	pf.logger, _ = db.(SqLogger)
-	return pf, nil
+	preparedFetch.logger, _ = db.(SqLogger)
+	return preparedFetch, nil
 }
 
 // PreparedFetch is the result of preparing a CompiledFetch on a DB.
 type PreparedFetch[T any] struct {
-	compiled *CompiledFetch[T]
-	stmt     *sql.Stmt
-	logger   SqLogger
+	compiledFetch *CompiledFetch[T]
+	stmt          *sql.Stmt
+	logger        SqLogger
 }
 
 // PrepareFetch returns a new PreparedFetch.
@@ -509,79 +491,77 @@ func PrepareFetchContext[T any](ctx context.Context, db DB, q Query, rowmapper f
 }
 
 // FetchCursor returns a new cursor.
-func (f PreparedFetch[T]) FetchCursor(params Params) (*Cursor[T], error) {
-	return f.fetchCursor(context.Background(), params, 1)
+func (preparedFetch PreparedFetch[T]) FetchCursor(params Params) (*Cursor[T], error) {
+	return preparedFetch.fetchCursor(context.Background(), params, 1)
 }
 
 // FetchCursorContext is like FetchCursor but additionally requires a context.Context.
-func (f PreparedFetch[T]) FetchCursorContext(ctx context.Context, params Params) (*Cursor[T], error) {
-	return f.fetchCursor(ctx, params, 1)
+func (preparedFetch PreparedFetch[T]) FetchCursorContext(ctx context.Context, params Params) (*Cursor[T], error) {
+	return preparedFetch.fetchCursor(ctx, params, 1)
 }
 
-func (f *PreparedFetch[T]) fetchCursor(ctx context.Context, params Params, skip int) (c *Cursor[T], err error) {
-	c = &Cursor[T]{
-		ctx: ctx,
-		stats: QueryStats{
-			Dialect: f.compiled.dialect,
-			Query:   f.compiled.query,
-			Args:    f.compiled.args,
-			Params:  f.compiled.params,
+func (preparedFetch *PreparedFetch[T]) fetchCursor(ctx context.Context, params Params, skip int) (cursor *Cursor[T], err error) {
+	cursor = &Cursor[T]{
+		ctx:       ctx,
+		rowmapper: preparedFetch.compiledFetch.rowmapper,
+		row: &Row{
+			dialect: preparedFetch.compiledFetch.dialect,
 		},
-		rowmapper: f.compiled.rowmapper,
-		logger:    f.logger,
+		queryStats: QueryStats{
+			Dialect:  preparedFetch.compiledFetch.dialect,
+			Query:    preparedFetch.compiledFetch.query,
+			Args:     preparedFetch.compiledFetch.args,
+			Params:   preparedFetch.compiledFetch.params,
+			RowCount: sql.NullInt64{Valid: true},
+		},
+		logger: preparedFetch.logger,
 	}
 
-	// Get fields and dest from rowmapper
-	c.row = newRow(f.compiled.dialect)
-	defer recoverPanic(&err)
-	_ = c.rowmapper(c.row)
-	if err != nil {
-		return nil, err
-	}
-	c.row.active = true
-	if len(c.row.fields) == 0 || len(c.row.dest) == 0 {
-		return nil, fmt.Errorf("rowmapper did not yield any fields")
-	}
-
-	// Substitute params
-	c.stats.Args, err = substituteParams(c.stats.Dialect, c.stats.Args, c.stats.Params, params)
+	// Call the rowmapper to populate row.scanDest.
+	defer mapperFunctionPanicked(&err)
+	_ = cursor.rowmapper(cursor.row)
 	if err != nil {
 		return nil, err
 	}
 
-	// Setup logger
-	c.stats.RowCount.Valid = true
-	if c.logger != nil {
-		c.logger.SqLogSettings(ctx, &c.logSettings)
-		if c.logSettings.IncludeCaller {
-			c.stats.CallerFile, c.stats.CallerLine, c.stats.CallerFunction = caller(skip + 1)
+	// Substitute params.
+	cursor.queryStats.Args, err = substituteParams(cursor.queryStats.Dialect, cursor.queryStats.Args, cursor.queryStats.Params, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Setup logger.
+	if cursor.logger != nil {
+		cursor.logger.SqLogSettings(ctx, &cursor.logSettings)
+		if cursor.logSettings.IncludeCaller {
+			cursor.queryStats.CallerFile, cursor.queryStats.CallerLine, cursor.queryStats.CallerFunction = caller(skip + 1)
 		}
 	}
 
-	// Run query
-	if c.logSettings.IncludeTime {
-		c.stats.StartedAt = time.Now()
+	// Run query.
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.StartedAt = time.Now()
 	}
-	c.sqlRows, c.stats.Err = f.stmt.QueryContext(ctx, c.stats.Args...)
-	if c.logSettings.IncludeTime {
-		c.stats.TimeTaken = time.Since(c.stats.StartedAt)
+	cursor.row.sqlRows, cursor.queryStats.Err = preparedFetch.stmt.QueryContext(ctx, cursor.queryStats.Args...)
+	if cursor.logSettings.IncludeTime {
+		cursor.queryStats.TimeTaken = time.Since(cursor.queryStats.StartedAt)
 	}
-	if c.stats.Err != nil {
-		return nil, c.stats.Err
+	if cursor.queryStats.Err != nil {
+		return nil, cursor.queryStats.Err
 	}
 
-	// Allocate resultsBuf
-	if c.logSettings.IncludeResults > 0 {
-		c.resultsBuf = bufpool.Get().(*bytes.Buffer)
-		c.resultsBuf.Reset()
+	// Allocate the resultsBuffer.
+	if cursor.logSettings.IncludeResults > 0 {
+		cursor.resultsBuffer = bufpool.Get().(*bytes.Buffer)
+		cursor.resultsBuffer.Reset()
 	}
-	return c, nil
+	return cursor, nil
 }
 
 // FetchOne returns the first result from running the PreparedFetch with the
 // give params.
-func (f *PreparedFetch[T]) FetchOne(params Params) (T, error) {
-	cursor, err := f.fetchCursor(context.Background(), params, 1)
+func (preparedFetch *PreparedFetch[T]) FetchOne(params Params) (T, error) {
+	cursor, err := preparedFetch.fetchCursor(context.Background(), params, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -590,8 +570,8 @@ func (f *PreparedFetch[T]) FetchOne(params Params) (T, error) {
 }
 
 // FetchOneContext is like FetchOne but additionally requires a context.Context.
-func (f *PreparedFetch[T]) FetchOneContext(ctx context.Context, params Params) (T, error) {
-	cursor, err := f.fetchCursor(ctx, params, 1)
+func (preparedFetch *PreparedFetch[T]) FetchOneContext(ctx context.Context, params Params) (T, error) {
+	cursor, err := preparedFetch.fetchCursor(ctx, params, 1)
 	if err != nil {
 		return *new(T), err
 	}
@@ -601,8 +581,8 @@ func (f *PreparedFetch[T]) FetchOneContext(ctx context.Context, params Params) (
 
 // FetchAll returns all the results from running the PreparedFetch with the
 // give params.
-func (f *PreparedFetch[T]) FetchAll(params Params) ([]T, error) {
-	cursor, err := f.fetchCursor(context.Background(), params, 1)
+func (preparedFetch *PreparedFetch[T]) FetchAll(params Params) ([]T, error) {
+	cursor, err := preparedFetch.fetchCursor(context.Background(), params, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -611,8 +591,8 @@ func (f *PreparedFetch[T]) FetchAll(params Params) ([]T, error) {
 }
 
 // FetchAllContext is like FetchAll but additionally requires a context.Context.
-func (f *PreparedFetch[T]) FetchAllContext(ctx context.Context, params Params) ([]T, error) {
-	cursor, err := f.fetchCursor(ctx, params, 1)
+func (preparedFetch *PreparedFetch[T]) FetchAllContext(ctx context.Context, params Params) ([]T, error) {
+	cursor, err := preparedFetch.fetchCursor(ctx, params, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -621,74 +601,80 @@ func (f *PreparedFetch[T]) FetchAllContext(ctx context.Context, params Params) (
 }
 
 // GetCompiled returns a copy of the underlying CompiledFetch.
-func (f *PreparedFetch[T]) GetCompiled() *CompiledFetch[T] {
-	return NewCompiledFetch(f.compiled.GetSQL())
+func (preparedFetch *PreparedFetch[T]) GetCompiled() *CompiledFetch[T] {
+	return NewCompiledFetch(preparedFetch.compiledFetch.GetSQL())
 }
 
 // Close closes the PreparedFetch.
-func (f *PreparedFetch[T]) Close() error {
-	if f.stmt == nil {
+func (preparedFetch *PreparedFetch[T]) Close() error {
+	if preparedFetch.stmt == nil {
 		return nil
 	}
-	return f.stmt.Close()
+	return preparedFetch.stmt.Close()
 }
 
 // Exec executes the given Query on the given DB.
-func Exec(db DB, q Query) (Result, error) {
-	return exec(context.Background(), db, q, 1)
+func Exec(db DB, query Query) (Result, error) {
+	return exec(context.Background(), db, query, 1)
 }
 
 // ExecContext is like Exec but additionally requires a context.Context.
-func ExecContext(ctx context.Context, db DB, q Query) (Result, error) {
-	return exec(ctx, db, q, 1)
+func ExecContext(ctx context.Context, db DB, query Query) (Result, error) {
+	return exec(ctx, db, query, 1)
 }
 
-func exec(ctx context.Context, db DB, q Query, skip int) (result Result, err error) {
+func exec(ctx context.Context, db DB, query Query, skip int) (result Result, err error) {
 	if db == nil {
 		return result, fmt.Errorf("db is nil")
 	}
-	if q == nil {
+	if query == nil {
 		return result, fmt.Errorf("query is nil")
 	}
+	dialect := query.GetDialect()
+	queryStats := QueryStats{
+		Dialect: dialect,
+		Params:  make(map[string][]int),
+	}
 
-	// Setup logging
+	// Build query.
+	buf := bufpool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufpool.Put(buf)
+	err = query.WriteSQL(ctx, dialect, buf, &queryStats.Args, queryStats.Params)
+	queryStats.Query = buf.String()
+	if err != nil {
+		return result, err
+	}
+
+	// Setup logger.
 	var logSettings LogSettings
-	var stats QueryStats
-	if sqLogger, ok := db.(SqLogger); ok {
-		sqLogger.SqLogSettings(ctx, &logSettings)
+	if logger, ok := db.(SqLogger); ok {
+		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
-			stats.CallerFile, stats.CallerLine, stats.CallerFunction = caller(skip + 1)
+			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
 		}
 		defer func() {
 			if logSettings.LogAsynchronously {
-				go sqLogger.SqLogQuery(ctx, stats)
+				go logger.SqLogQuery(ctx, queryStats)
 			} else {
-				sqLogger.SqLogQuery(ctx, stats)
+				logger.SqLogQuery(ctx, queryStats)
 			}
 		}()
 	}
 
-	// Build query
-	stats.Dialect = q.GetDialect()
-	stats.Params = make(map[string][]int)
-	stats.Query, stats.Args, stats.Err = ToSQLContext(ctx, stats.Dialect, q, stats.Params)
-	if stats.Err != nil {
-		return result, stats.Err
-	}
-
-	// Run query
+	// Run query.
 	if logSettings.IncludeTime {
-		stats.StartedAt = time.Now()
+		queryStats.StartedAt = time.Now()
 	}
-	var res sql.Result
-	res, stats.Err = db.ExecContext(ctx, stats.Query, stats.Args...)
+	var sqlResult sql.Result
+	sqlResult, queryStats.Err = db.ExecContext(ctx, queryStats.Query, queryStats.Args...)
 	if logSettings.IncludeTime {
-		stats.TimeTaken = time.Since(stats.StartedAt)
+		queryStats.TimeTaken = time.Since(queryStats.StartedAt)
 	}
-	if stats.Err != nil {
-		return result, stats.Err
+	if queryStats.Err != nil {
+		return result, queryStats.Err
 	}
-	return execResult(res, &stats)
+	return execResult(sqlResult, &queryStats)
 }
 
 // CompiledExec is the result of compiling a Query down into a query string and
@@ -711,91 +697,100 @@ func NewCompiledExec(dialect string, query string, args []any, params map[string
 }
 
 // CompileExec returns a new CompiledExec.
-func CompileExec(q Query) (*CompiledExec, error) {
-	return CompileExecContext(context.Background(), q)
+func CompileExec(query Query) (*CompiledExec, error) {
+	return CompileExecContext(context.Background(), query)
 }
 
 // CompileExecContext is like CompileExec but additionally requires a context.Context.
-func CompileExecContext(ctx context.Context, q Query) (*CompiledExec, error) {
-	var err error
-	e := &CompiledExec{}
-	if q == nil {
+func CompileExecContext(ctx context.Context, query Query) (*CompiledExec, error) {
+	if query == nil {
 		return nil, fmt.Errorf("query is nil")
 	}
-	e.dialect = q.GetDialect()
-	e.params = make(map[string][]int)
-	e.query, e.args, err = ToSQLContext(ctx, e.dialect, q, e.params)
+	dialect := query.GetDialect()
+	compiledExec := &CompiledExec{
+		dialect: dialect,
+		params:  make(map[string][]int),
+	}
+
+	// Build query.
+	buf := bufpool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufpool.Put(buf)
+	err := query.WriteSQL(ctx, dialect, buf, &compiledExec.args, compiledExec.params)
+	compiledExec.query = buf.String()
 	if err != nil {
 		return nil, err
 	}
-	return e, nil
+	return compiledExec, nil
 }
 
 // Exec executes the CompiledExec on the given DB with the given params.
-func (e *CompiledExec) Exec(db DB, params Params) (Result, error) {
-	return e.exec(context.Background(), db, params, 1)
+func (compiledExec *CompiledExec) Exec(db DB, params Params) (Result, error) {
+	return compiledExec.exec(context.Background(), db, params, 1)
 }
 
 // ExecContext is like Exec but additionally requires a context.Context.
-func (e *CompiledExec) ExecContext(ctx context.Context, db DB, params Params) (Result, error) {
-	return e.exec(ctx, db, params, 1)
+func (compiledExec *CompiledExec) ExecContext(ctx context.Context, db DB, params Params) (Result, error) {
+	return compiledExec.exec(ctx, db, params, 1)
 }
 
-func (e *CompiledExec) exec(ctx context.Context, db DB, params Params, skip int) (result Result, err error) {
+func (compiledExec *CompiledExec) exec(ctx context.Context, db DB, params Params, skip int) (result Result, err error) {
 	if db == nil {
 		return result, fmt.Errorf("db is nil")
 	}
-
-	// Setup logging
-	var logSettings LogSettings
-	stats := QueryStats{
-		Dialect: e.dialect,
-		Query:   e.query,
-		Args:    e.args,
-		Params:  e.params,
+	queryStats := QueryStats{
+		Dialect: compiledExec.dialect,
+		Query:   compiledExec.query,
+		Args:    compiledExec.args,
+		Params:  compiledExec.params,
 	}
-	if sqLogger, ok := db.(SqLogger); ok {
-		sqLogger.SqLogSettings(ctx, &logSettings)
+
+	// Setup logger.
+	var logSettings LogSettings
+	if logger, ok := db.(SqLogger); ok {
+		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
-			stats.CallerFile, stats.CallerLine, stats.CallerFunction = caller(skip + 1)
+			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
 		}
 		defer func() {
 			if logSettings.LogAsynchronously {
-				go sqLogger.SqLogQuery(ctx, stats)
+				go logger.SqLogQuery(ctx, queryStats)
 			} else {
-				sqLogger.SqLogQuery(ctx, stats)
+				logger.SqLogQuery(ctx, queryStats)
 			}
 		}()
 	}
 
-	// Substitute params
-	stats.Args, err = substituteParams(stats.Dialect, stats.Args, stats.Params, params)
+	// Substitute params.
+	queryStats.Args, err = substituteParams(queryStats.Dialect, queryStats.Args, queryStats.Params, params)
 	if err != nil {
 		return result, err
 	}
 
-	// Run query
+	// Run query.
 	if logSettings.IncludeTime {
-		stats.StartedAt = time.Now()
+		queryStats.StartedAt = time.Now()
 	}
-	var res sql.Result
-	res, stats.Err = db.ExecContext(ctx, stats.Query, stats.Args...)
+	var sqlResult sql.Result
+	sqlResult, queryStats.Err = db.ExecContext(ctx, queryStats.Query, queryStats.Args...)
 	if logSettings.IncludeTime {
-		stats.TimeTaken = time.Since(stats.StartedAt)
+		queryStats.TimeTaken = time.Since(queryStats.StartedAt)
 	}
-	if stats.Err != nil {
-		return result, stats.Err
+	if queryStats.Err != nil {
+		return result, queryStats.Err
 	}
-	return execResult(res, &stats)
+	return execResult(sqlResult, &queryStats)
 }
 
-func (e *CompiledExec) GetSQL() (dialect string, query string, args []any, params map[string][]int) {
-	dialect = e.dialect
-	query = e.query
-	args = make([]any, len(e.args))
+// GetSQL returns a copy of the dialect, query, args, params and rowmapper that
+// make up the CompiledExec.
+func (compiledExec *CompiledExec) GetSQL() (dialect string, query string, args []any, params map[string][]int) {
+	dialect = compiledExec.dialect
+	query = compiledExec.query
+	args = make([]any, len(compiledExec.args))
 	params = make(map[string][]int)
-	copy(args, e.args)
-	for name, indexes := range e.params {
+	copy(args, compiledExec.args)
+	for name, indexes := range compiledExec.params {
 		indexes2 := make([]int, len(indexes))
 		copy(indexes2, indexes)
 		params[name] = indexes2
@@ -805,29 +800,29 @@ func (e *CompiledExec) GetSQL() (dialect string, query string, args []any, param
 
 // Prepare creates a PreparedExec from a CompiledExec by preparing it on the
 // given DB.
-func (e *CompiledExec) Prepare(db DB) (*PreparedExec, error) {
-	return e.PrepareContext(context.Background(), db)
+func (compiledExec *CompiledExec) Prepare(db DB) (*PreparedExec, error) {
+	return compiledExec.PrepareContext(context.Background(), db)
 }
 
 // PrepareContext is like Prepare but additionally requires a context.Context.
-func (e *CompiledExec) PrepareContext(ctx context.Context, db DB) (*PreparedExec, error) {
+func (compiledExec *CompiledExec) PrepareContext(ctx context.Context, db DB) (*PreparedExec, error) {
 	var err error
-	pe := &PreparedExec{
-		compiled: NewCompiledExec(e.GetSQL()),
+	preparedExec := &PreparedExec{
+		compiledExec: NewCompiledExec(compiledExec.GetSQL()),
 	}
-	pe.stmt, err = db.PrepareContext(ctx, e.query)
+	preparedExec.stmt, err = db.PrepareContext(ctx, compiledExec.query)
 	if err != nil {
 		return nil, err
 	}
-	pe.logger, _ = db.(SqLogger)
-	return pe, nil
+	preparedExec.logger, _ = db.(SqLogger)
+	return preparedExec, nil
 }
 
 // PrepareExec is the result of preparing a CompiledExec on a DB.
 type PreparedExec struct {
-	compiled *CompiledExec
-	stmt     *sql.Stmt
-	logger   SqLogger
+	compiledExec *CompiledExec
+	stmt         *sql.Stmt
+	logger       SqLogger
 }
 
 // PrepareExec returns a new PreparedExec.
@@ -846,86 +841,91 @@ func PrepareExecContext(ctx context.Context, db DB, q Query) (*PreparedExec, err
 }
 
 // Close closes the PreparedExec.
-func (e *PreparedExec) Close() error {
-	if e.stmt == nil {
+func (preparedExec *PreparedExec) Close() error {
+	if preparedExec.stmt == nil {
 		return nil
 	}
-	return e.stmt.Close()
+	return preparedExec.stmt.Close()
 }
 
 // Exec executes the PreparedExec with the given params.
-func (e *PreparedExec) Exec(params Params) (Result, error) {
-	return e.exec(context.Background(), params, 1)
+func (preparedExec *PreparedExec) Exec(params Params) (Result, error) {
+	return preparedExec.exec(context.Background(), params, 1)
 }
 
 // ExecContext is like Exec but additionally requires a context.Context.
-func (e *PreparedExec) ExecContext(ctx context.Context, params Params) (Result, error) {
-	return e.exec(ctx, params, 1)
+func (preparedExec *PreparedExec) ExecContext(ctx context.Context, params Params) (Result, error) {
+	return preparedExec.exec(ctx, params, 1)
 }
 
-func (e *PreparedExec) exec(ctx context.Context, params Params, skip int) (result Result, err error) {
-	// Setup logging
-	var logSettings LogSettings
-	stats := QueryStats{
-		Dialect: e.compiled.dialect,
-		Query:   e.compiled.query,
-		Args:    e.compiled.args,
-		Params:  e.compiled.params,
+func (preparedExec *PreparedExec) exec(ctx context.Context, params Params, skip int) (result Result, err error) {
+	queryStats := QueryStats{
+		Dialect: preparedExec.compiledExec.dialect,
+		Query:   preparedExec.compiledExec.query,
+		Args:    preparedExec.compiledExec.args,
+		Params:  preparedExec.compiledExec.params,
 	}
-	if e.logger != nil {
-		e.logger.SqLogSettings(ctx, &logSettings)
+
+	// Setup logger.
+	var logSettings LogSettings
+	if preparedExec.logger != nil {
+		preparedExec.logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
-			stats.CallerFile, stats.CallerLine, stats.CallerFunction = caller(skip + 1)
+			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
 		}
 		defer func() {
 			if logSettings.LogAsynchronously {
-				go e.logger.SqLogQuery(ctx, stats)
+				go preparedExec.logger.SqLogQuery(ctx, queryStats)
 			} else {
-				e.logger.SqLogQuery(ctx, stats)
+				preparedExec.logger.SqLogQuery(ctx, queryStats)
 			}
 		}()
 	}
 
-	// Substitute params
-	stats.Args, err = substituteParams(stats.Dialect, stats.Args, stats.Params, params)
+	// Substitute params.
+	queryStats.Args, err = substituteParams(queryStats.Dialect, queryStats.Args, queryStats.Params, params)
 	if err != nil {
 		return result, err
 	}
 
-	// Run query
+	// Run query.
 	if logSettings.IncludeTime {
-		stats.StartedAt = time.Now()
+		queryStats.StartedAt = time.Now()
 	}
-	var res sql.Result
-	res, stats.Err = e.stmt.ExecContext(ctx, stats.Args...)
+	var sqlResult sql.Result
+	sqlResult, queryStats.Err = preparedExec.stmt.ExecContext(ctx, queryStats.Args...)
 	if logSettings.IncludeTime {
-		stats.TimeTaken = time.Since(stats.StartedAt)
+		queryStats.TimeTaken = time.Since(queryStats.StartedAt)
 	}
-	if stats.Err != nil {
-		return result, stats.Err
+	if queryStats.Err != nil {
+		return result, queryStats.Err
 	}
-	return execResult(res, &stats)
+	return execResult(sqlResult, &queryStats)
 }
 
-func getFieldNames(ctx context.Context, dialect string, fields []Field) []string {
+func getFieldNames(ctx context.Context, row *Row) []string {
+	if len(row.fields) == 0 {
+		columns, _ := row.sqlRows.Columns()
+		return columns
+	}
 	buf := bufpool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufpool.Put(buf)
-	args := new([]any)
-	fieldNames := make([]string, 0, len(fields))
-	for _, field := range fields {
+	var args []any
+	fieldNames := make([]string, 0, len(row.fields))
+	for _, field := range row.fields {
 		if alias := getAlias(field); alias != "" {
 			fieldNames = append(fieldNames, alias)
 			continue
 		}
 		buf.Reset()
-		*args = (*args)[:0]
-		err := field.WriteSQL(ctx, dialect, buf, args, nil)
+		args = args[:0]
+		err := field.WriteSQL(ctx, row.dialect, buf, &args, nil)
 		if err != nil {
 			fieldNames = append(fieldNames, "%!(error="+err.Error()+")")
 			continue
 		}
-		fieldName, err := Sprintf(dialect, buf.String(), *args)
+		fieldName, err := Sprintf(row.dialect, buf.String(), args)
 		if err != nil {
 			fieldNames = append(fieldNames, "%!(error="+err.Error()+")")
 			continue
@@ -933,6 +933,29 @@ func getFieldNames(ctx context.Context, dialect string, fields []Field) []string
 		fieldNames = append(fieldNames, fieldName)
 	}
 	return fieldNames
+}
+
+func getFieldMappings(dialect string, fields []Field, scanDest []any) string {
+	var buf bytes.Buffer
+	var args []any
+	var b strings.Builder
+	for i, field := range fields {
+		b.WriteString(fmt.Sprintf("\n %02d. ", i+1))
+		buf.Reset()
+		args = args[:0]
+		err := field.WriteSQL(context.Background(), dialect, &buf, &args, nil)
+		if err != nil {
+			buf.WriteString("%!(error=" + err.Error() + ")")
+			continue
+		}
+		fieldName, err := Sprintf(dialect, buf.String(), args)
+		if err != nil {
+			b.WriteString("%!(error=" + err.Error() + ")")
+			continue
+		}
+		b.WriteString(fieldName + " => " + reflect.TypeOf(scanDest[i]).String())
+	}
+	return b.String()
 }
 
 func cursorResult[T any](cursor *Cursor[T]) (result T, err error) {
@@ -961,93 +984,98 @@ func cursorResults[T any](cursor *Cursor[T]) (results []T, err error) {
 	return results, cursor.Close()
 }
 
-func execResult(res sql.Result, stats *QueryStats) (Result, error) {
+func execResult(sqlResult sql.Result, queryStats *QueryStats) (Result, error) {
 	var err error
 	var result Result
-	if stats.Dialect == DialectSQLite || stats.Dialect == DialectMySQL {
-		result.LastInsertId, err = res.LastInsertId()
+	if queryStats.Dialect == DialectSQLite || queryStats.Dialect == DialectMySQL {
+		result.LastInsertId, err = sqlResult.LastInsertId()
 		if err != nil {
 			return result, err
 		}
-		stats.LastInsertId.Valid = true
-		stats.LastInsertId.Int64 = result.LastInsertId
+		queryStats.LastInsertId.Valid = true
+		queryStats.LastInsertId.Int64 = result.LastInsertId
 	}
-	result.RowsAffected, err = res.RowsAffected()
+	result.RowsAffected, err = sqlResult.RowsAffected()
 	if err != nil {
 		return result, err
 	}
-	stats.RowsAffected.Valid = true
-	stats.RowsAffected.Int64 = result.RowsAffected
+	queryStats.RowsAffected.Valid = true
+	queryStats.RowsAffected.Int64 = result.RowsAffected
 	return result, nil
 }
 
 // FetchExists returns a boolean indicating if running the given Query on the
 // given DB returned any results.
-func FetchExists(db DB, q Query) (exists bool, err error) {
-	return fetchExists(context.Background(), db, q, 1)
+func FetchExists(db DB, query Query) (exists bool, err error) {
+	return fetchExists(context.Background(), db, query, 1)
 }
 
 // FetchExistsContext is like FetchExists but additionally requires a
 // context.Context.
-func FetchExistsContext(ctx context.Context, db DB, q Query) (exists bool, err error) {
-	return fetchExists(ctx, db, q, 1)
+func FetchExistsContext(ctx context.Context, db DB, query Query) (exists bool, err error) {
+	return fetchExists(ctx, db, query, 1)
 }
 
-func fetchExists(ctx context.Context, db DB, q Query, skip int) (exists bool, err error) {
-	// Setup logger
-	var stats QueryStats
+func fetchExists(ctx context.Context, db DB, query Query, skip int) (exists bool, err error) {
+	dialect := query.GetDialect()
+	queryStats := QueryStats{
+		Dialect: dialect,
+		Exists:  sql.NullBool{Valid: true},
+		Params:  make(map[string][]int),
+	}
+
+	// Build query.
+	buf := bufpool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufpool.Put(buf)
+	if dialect == DialectSQLServer {
+		query = Queryf("SELECT CASE WHEN EXISTS ({}) THEN 1 ELSE 0 END", query)
+	} else {
+		query = Queryf("SELECT EXISTS ({})", query)
+	}
+	err = query.WriteSQL(ctx, dialect, buf, &queryStats.Args, queryStats.Params)
+	queryStats.Query = buf.String()
+	if err != nil {
+		return false, err
+	}
+
+	// Setup logger.
 	var logSettings LogSettings
-	stats.RowCount.Valid = true
-	if sqLogger, ok := db.(SqLogger); ok {
-		sqLogger.SqLogSettings(ctx, &logSettings)
+	if logger, ok := db.(SqLogger); ok {
+		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
-			stats.CallerFile, stats.CallerLine, stats.CallerFunction = caller(skip + 1)
+			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
 		}
 		defer func() {
 			if logSettings.LogAsynchronously {
-				go sqLogger.SqLogQuery(ctx, stats)
+				go logger.SqLogQuery(ctx, queryStats)
 			} else {
-				sqLogger.SqLogQuery(ctx, stats)
+				logger.SqLogQuery(ctx, queryStats)
 			}
 		}()
 	}
 
-	// Build query
-	stats.Dialect = q.GetDialect()
-	var existsQuery Query
-	if stats.Dialect == DialectSQLServer {
-		existsQuery = Queryf("IF EXISTS ({}) SELECT 1 ELSE SELECT 0", q)
-	} else {
-		existsQuery = Queryf("SELECT EXISTS ({})", q)
-	}
-	stats.Params = make(map[string][]int)
-	stats.Query, stats.Args, stats.Err = ToSQLContext(ctx, stats.Dialect, existsQuery, stats.Params)
-	if stats.Err != nil {
-		return false, stats.Err
-	}
-
-	// Run query
+	// Run query.
 	if logSettings.IncludeTime {
-		stats.StartedAt = time.Now()
+		queryStats.StartedAt = time.Now()
 	}
 	var sqlRows *sql.Rows
-	sqlRows, stats.Err = db.QueryContext(ctx, stats.Query, stats.Args...)
+	sqlRows, queryStats.Err = db.QueryContext(ctx, queryStats.Query, queryStats.Args...)
 	if logSettings.IncludeTime {
-		stats.TimeTaken = time.Since(stats.StartedAt)
+		queryStats.TimeTaken = time.Since(queryStats.StartedAt)
 	}
-	if stats.Err != nil {
-		return false, stats.Err
+	if queryStats.Err != nil {
+		return false, queryStats.Err
 	}
 
 	for sqlRows.Next() {
-		stats.Err = sqlRows.Scan(&exists)
-		if stats.Err != nil {
-			return false, stats.Err
+		err = sqlRows.Scan(&exists)
+		if err != nil {
+			return false, err
 		}
 		break
 	}
-	stats.Exists.Valid = true
-	stats.Exists.Bool = exists
+	queryStats.Exists.Bool = exists
 
 	if err := sqlRows.Close(); err != nil {
 		return exists, err
@@ -1056,4 +1084,42 @@ func fetchExists(ctx context.Context, db DB, q Query, skip int) (exists bool, er
 		return exists, err
 	}
 	return exists, nil
+}
+
+// substituteParams will return a new args slice by substituting values from
+// the given paramValues. The input args slice is untouched.
+func substituteParams(dialect string, args []any, paramIndexes map[string][]int, paramValues map[string]any) ([]any, error) {
+	if len(paramValues) == 0 {
+		return args, nil
+	}
+	newArgs := make([]any, len(args))
+	copy(newArgs, args)
+	var err error
+	for name, value := range paramValues {
+		indexes := paramIndexes[name]
+		for _, index := range indexes {
+			switch arg := newArgs[index].(type) {
+			case sql.NamedArg:
+				arg.Value, err = preprocessValue(dialect, value)
+				if err != nil {
+					return nil, err
+				}
+				newArgs[index] = arg
+			default:
+				value, err = preprocessValue(dialect, value)
+				if err != nil {
+					return nil, err
+				}
+				newArgs[index] = value
+			}
+		}
+	}
+	return newArgs, nil
+}
+
+func caller(skip int) (file string, line int, function string) {
+	pc, file, line, _ := runtime.Caller(skip + 1)
+	fn := runtime.FuncForPC(pc)
+	function = fn.Name()
+	return file, line, function
 }
