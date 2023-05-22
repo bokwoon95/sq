@@ -237,12 +237,7 @@ func (row *Row) array(destPtr any, field Array, skip int) {
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to string array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]string, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	case *[]int:
 		var array pqarray.Int64Array
 		err := array.Scan(scanDest.bytes)
@@ -263,60 +258,35 @@ func (row *Row) array(destPtr any, field Array, skip int) {
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to int64 array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]int64, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	case *[]int32:
 		var array pqarray.Int32Array
 		err := array.Scan(scanDest.bytes)
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to int32 array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]int32, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	case *[]float64:
 		var array pqarray.Float64Array
 		err := array.Scan(scanDest.bytes)
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to float64 array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]float64, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	case *[]float32:
 		var array pqarray.Float32Array
 		err := array.Scan(scanDest.bytes)
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to float32 array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]float32, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	case *[]bool:
 		var array pqarray.BoolArray
 		err := array.Scan(scanDest.bytes)
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"unable to convert %q to bool array: %w", string(scanDest.bytes), err))
 		}
-		*destPtr = (*destPtr)[:cap(*destPtr)]
-		if len(*destPtr) < len(array) {
-			*destPtr = make([]bool, len(array))
-		}
-		*destPtr = (*destPtr)[:len(array)]
-		copy(*destPtr, array)
+		*destPtr = array
 	default:
 		panic(fmt.Errorf(callsite(skip+1)+"destptr (%T) must be either a pointer to a []string, []int, []int64, []int32, []float64, []float32 or []bool", destPtr))
 	}
