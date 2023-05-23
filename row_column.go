@@ -25,10 +25,9 @@ type Row struct {
 	rawSQLMode bool
 }
 
-// ColumnTypes returns the names of the columns returned by the query. This
-// method can only be called in a rowmapper if it is paired with a raw SQL
-// query e.g. Queryf("SELECT * FROM my_table"). Otherwise, an error will be
-// returned.
+// Column returns the names of the columns returned by the query. This method
+// can only be called in a rowmapper if it is paired with a raw SQL query e.g.
+// Queryf("SELECT * FROM my_table"). Otherwise, an error will be returned.
 func (row *Row) Columns() []string {
 	if row.sqlRows == nil {
 		row.rawSQLMode = true
