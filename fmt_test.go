@@ -571,6 +571,30 @@ func TestWritef(t *testing.T) {
 		assert(t, tt)
 	})
 
+	t.Run("preprocessValue kicks in for anonymous, ordinal params, named params and slices", func(t *testing.T) {
+		t.Parallel()
+		var tt TT
+		tt.dialect = DialectSQLite
+		tt.format = "SELECT {}, {2}, {foo}, {3}, {bar}"
+		tt.values = []any{
+			Monday,
+			sql.Named("foo", Tuesday),
+			Wednesday,
+			sql.Named("bar", []Weekday{Thursday, Friday, Saturday}),
+		}
+		tt.wantQuery = "SELECT $1, $foo, $foo, $3, $4, $5, $6"
+		tt.wantArgs = []any{
+			"Monday",
+			sql.NamedArg{Name: "foo", Value: "Tuesday"},
+			"Wednesday",
+			"Thursday",
+			"Friday",
+			"Saturday",
+		}
+		tt.wantParams = map[string][]int{"foo": {1}}
+		assert(t, tt)
+	})
+
 	t.Run("no closing curly brace }", func(t *testing.T) {
 		t.Parallel()
 		var tt TT

@@ -8,6 +8,32 @@ import (
 	"github.com/google/uuid"
 )
 
+type Weekday uint
+
+const (
+	WeekdayInvalid Weekday = iota
+	Sunday
+	Monday
+	Tuesday
+	Wednesday
+	Thursday
+	Friday
+	Saturday
+)
+
+func (d Weekday) Enumerate() []string {
+	return []string{
+		WeekdayInvalid: "",
+		Sunday:         "Sunday",
+		Monday:         "Monday",
+		Tuesday:        "Tuesday",
+		Wednesday:      "Wednesday",
+		Thursday:       "Thursday",
+		Friday:         "Friday",
+		Saturday:       "Saturday",
+	}
+}
+
 func Test_preprocessValue(t *testing.T) {
 	type TestTable struct {
 		description string

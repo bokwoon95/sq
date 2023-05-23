@@ -709,6 +709,11 @@ func writeOrdinalValue(ctx context.Context, dialect string, buf *bytes.Buffer, a
 	if isExpandableSlice(value) {
 		return expandSlice(ctx, dialect, buf, args, params, value)
 	}
+	var err error
+	value, err = preprocessValue(dialect, value)
+	if err != nil {
+		return err
+	}
 	switch dialect {
 	case DialectSQLite, DialectPostgres, DialectSQLServer:
 		index, ok := ordinalIndices[ordinal]

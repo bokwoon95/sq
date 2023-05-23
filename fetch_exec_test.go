@@ -68,32 +68,6 @@ func actorRowMapperRawSQL(row *Row) Actor {
 	return actor
 }
 
-type Weekday uint
-
-const (
-	WeekdayInvalid Weekday = iota
-	Sunday
-	Monday
-	Tuesday
-	Wednesday
-	Thursday
-	Friday
-	Saturday
-)
-
-func (d Weekday) Enumerate() []string {
-	return []string{
-		WeekdayInvalid: "",
-		Sunday:         "Sunday",
-		Monday:         "Monday",
-		Tuesday:        "Tuesday",
-		Wednesday:      "Wednesday",
-		Thursday:       "Thursday",
-		Friday:         "Friday",
-		Saturday:       "Saturday",
-	}
-}
-
 func Test_substituteParams(t *testing.T) {
 	t.Run("no params provided", func(t *testing.T) {
 		t.Parallel()
