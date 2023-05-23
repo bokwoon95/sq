@@ -129,7 +129,7 @@ func (l *sqLogger) SqLogSettings(ctx context.Context, settings *LogSettings) {
 }
 
 // SqLogQuery implements the SqLogger interface.
-func (l *sqLogger) SqLogQuery(ctx context.Context, stats QueryStats) {
+func (l *sqLogger) SqLogQuery(ctx context.Context, queryStats QueryStats) {
 	select {
 	case <-ctx.Done():
 		return
@@ -147,57 +147,60 @@ func (l *sqLogger) SqLogQuery(ctx context.Context, stats QueryStats) {
 	buf := bufpool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufpool.Put(buf)
-	if stats.Err == nil {
+	if queryStats.Err == nil {
 		buf.WriteString(green + "[OK]" + reset)
 	} else {
 		buf.WriteString(red + "[FAIL]" + reset)
 	}
 	if l.config.HideArgs {
-		buf.WriteString(" " + stats.Query + ";")
+		buf.WriteString(" " + queryStats.Query + ";")
 	} else if !l.config.InterpolateVerbose {
-		query, err := Sprintf(stats.Dialect, stats.Query, stats.Args)
+		query, err := Sprintf(queryStats.Dialect, queryStats.Query, queryStats.Args)
 		if err != nil {
 			query += " " + err.Error()
 		}
 		buf.WriteString(" " + query + ";")
 	}
-	if stats.Err != nil {
-		errStr := stats.Err.Error()
+	if queryStats.Err != nil {
+		errStr := queryStats.Err.Error()
 		if i := strings.IndexByte(errStr, '\n'); i < 0 {
-			buf.WriteString(blue + " err" + reset + "={" + stats.Err.Error() + "}")
+			buf.WriteString(blue + " err" + reset + "={" + queryStats.Err.Error() + "}")
 		}
 	}
 	if l.config.ShowTimeTaken {
-		buf.WriteString(blue + " timeTaken" + reset + "=" + stats.TimeTaken.String())
+		buf.WriteString(blue + " timeTaken" + reset + "=" + queryStats.TimeTaken.String())
 	}
-	if stats.RowCount.Valid {
-		buf.WriteString(blue + " rowCount" + reset + "=" + strconv.FormatInt(stats.RowCount.Int64, 10))
+	if queryStats.RowCount.Valid {
+		buf.WriteString(blue + " rowCount" + reset + "=" + strconv.FormatInt(queryStats.RowCount.Int64, 10))
 	}
-	if stats.RowsAffected.Valid {
-		buf.WriteString(blue + " rowsAffected" + reset + "=" + strconv.FormatInt(stats.RowsAffected.Int64, 10))
+	if queryStats.RowsAffected.Valid {
+		buf.WriteString(blue + " rowsAffected" + reset + "=" + strconv.FormatInt(queryStats.RowsAffected.Int64, 10))
 	}
-	if stats.LastInsertId.Valid {
-		buf.WriteString(blue + " lastInsertId" + reset + "=" + strconv.FormatInt(stats.LastInsertId.Int64, 10))
+	if queryStats.LastInsertId.Valid {
+		buf.WriteString(blue + " lastInsertId" + reset + "=" + strconv.FormatInt(queryStats.LastInsertId.Int64, 10))
+	}
+	if queryStats.Exists.Valid {
+		buf.WriteString(blue + " exists" + reset + "=" + strconv.FormatBool(queryStats.Exists.Bool))
 	}
 	if l.config.ShowCaller {
-		buf.WriteString(blue + " caller" + reset + "=" + stats.CallerFile + ":" + strconv.Itoa(stats.CallerLine) + ":" + filepath.Base(stats.CallerFunction))
+		buf.WriteString(blue + " caller" + reset + "=" + queryStats.CallerFile + ":" + strconv.Itoa(queryStats.CallerLine) + ":" + filepath.Base(queryStats.CallerFunction))
 	}
 	if !l.config.HideArgs && l.config.InterpolateVerbose {
 		buf.WriteString("\n" + purple + "----[ Executing query ]----" + reset)
-		buf.WriteString("\n" + stats.Query + "; " + fmt.Sprintf("%#v", stats.Args))
+		buf.WriteString("\n" + queryStats.Query + "; " + fmt.Sprintf("%#v", queryStats.Args))
 		buf.WriteString("\n" + purple + "----[ with bind values ]----" + reset)
-		query, err := Sprintf(stats.Dialect, stats.Query, stats.Args)
+		query, err := Sprintf(queryStats.Dialect, queryStats.Query, queryStats.Args)
 		query += ";"
 		if err != nil {
 			query += " " + err.Error()
 		}
 		buf.WriteString("\n" + query)
 	}
-	if l.config.ShowResults > 0 && stats.Err == nil {
+	if l.config.ShowResults > 0 && queryStats.Err == nil {
 		buf.WriteString("\n" + purple + "----[ Fetched result ]----" + reset)
-		buf.WriteString(stats.Results)
-		if stats.RowCount.Int64 > int64(l.config.ShowResults) {
-			buf.WriteString("\n...\n(Fetched " + strconv.FormatInt(stats.RowCount.Int64, 10) + " rows)")
+		buf.WriteString(queryStats.Results)
+		if queryStats.RowCount.Int64 > int64(l.config.ShowResults) {
+			buf.WriteString("\n...\n(Fetched " + strconv.FormatInt(queryStats.RowCount.Int64, 10) + " rows)")
 		}
 	}
 	if buf.Len() > 0 {

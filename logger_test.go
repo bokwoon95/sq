@@ -115,6 +115,13 @@ func TestLogger(t *testing.T) {
 		},
 		wantOutput: "\x1b[92m[OK]\x1b[0m SELECT 1;\x1b[94m lastInsertId\x1b[0m=7\n",
 	}, {
+		description: "Exists",
+		stats: QueryStats{
+			Query:  "SELECT EXISTS (SELECT 1)",
+			Exists: sql.NullBool{Valid: true, Bool: true},
+		},
+		wantOutput: "\x1b[92m[OK]\x1b[0m SELECT EXISTS (SELECT 1);\x1b[94m exists\x1b[0m=true\n",
+	}, {
 		description: "ShowCaller",
 		config:      LoggerConfig{ShowCaller: true},
 		stats: QueryStats{
