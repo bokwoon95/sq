@@ -1337,6 +1337,14 @@ func TestSprint(t *testing.T) {
 		dialect:     DialectPostgres,
 		value:       "\nthe quick brown fox\r\n",
 		wantString:  `CHR(10) || 'the quick brown fox' || CHR(13) || CHR(10)`,
+	}, {
+		description: "sql.NullString with newlines",
+		dialect:     DialectPostgres,
+		value: sql.NullString{
+			Valid:  true,
+			String: "\rthe quick\nbrown fox\r\n",
+		},
+		wantString: `CHR(13) || 'the quick' || CHR(10) || 'brown fox' || CHR(13) || CHR(10)`,
 	}}
 
 	for _, tt := range tests {

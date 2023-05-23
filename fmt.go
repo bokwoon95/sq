@@ -537,7 +537,7 @@ func Sprint(dialect string, v any) (string, error) {
 		if !v.Valid {
 			return "NULL", nil
 		}
-		return `'` + EscapeQuote(v.String, '\'') + `'`, nil
+		return Sprint(dialect, v.String)
 	case sql.NullTime:
 		if !v.Valid {
 			return "NULL", nil
