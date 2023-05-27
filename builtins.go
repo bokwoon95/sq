@@ -107,52 +107,51 @@ func (e Expression) IsAssignment() {}
 
 // CustomQuery represents a user-defined query.
 type CustomQuery struct {
-	dialect string
-	format  string
-	values  []any
+	Dialect string
+	Format  string
+	Values  []any
 	fields  []Field
-	alias   string
 }
 
 var _ Query = (*CustomQuery)(nil)
 
 // Queryf creates a new query using Writef syntax.
 func Queryf(format string, values ...any) CustomQuery {
-	return CustomQuery{format: format, values: values}
+	return CustomQuery{Format: format, Values: values}
 }
 
 // Queryf creates a new SQLite query using Writef syntax.
 func (b sqliteQueryBuilder) Queryf(format string, values ...any) CustomQuery {
-	return CustomQuery{dialect: DialectSQLite, format: format, values: values}
+	return CustomQuery{Dialect: DialectSQLite, Format: format, Values: values}
 }
 
 // Queryf creates a new Postgres query using Writef syntax.
 func (b postgresQueryBuilder) Queryf(format string, values ...any) CustomQuery {
-	return CustomQuery{dialect: DialectPostgres, format: format, values: values}
+	return CustomQuery{Dialect: DialectPostgres, Format: format, Values: values}
 }
 
 // Queryf creates a new MySQL query using Writef syntax.
 func (b mysqlQueryBuilder) Queryf(format string, values ...any) CustomQuery {
-	return CustomQuery{dialect: DialectMySQL, format: format, values: values}
+	return CustomQuery{Dialect: DialectMySQL, Format: format, Values: values}
 }
 
 // Queryf creates a new SQL Server query using Writef syntax.
 func (b sqlserverQueryBuilder) Queryf(format string, values ...any) CustomQuery {
-	return CustomQuery{dialect: DialectSQLServer, format: format, values: values}
+	return CustomQuery{Dialect: DialectSQLServer, Format: format, Values: values}
 }
 
 // Append returns a new CustomQuery with the format string and values slice
 // appended to the current CustomQuery.
 func (q CustomQuery) Append(format string, values ...any) CustomQuery {
-	q.format += " " + format
-	q.values = append(q.values, values...)
+	q.Format += " " + format
+	q.Values = append(q.Values, values...)
 	return q
 }
 
 // WriteSQL implements the SQLWriter interface.
 func (q CustomQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
 	var err error
-	format := q.format
+	format := q.Format
 	splitAt := -1
 	for i := strings.IndexByte(format, '{'); i >= 0; i = strings.IndexByte(format, '{') {
 		if i+2 <= len(format) && format[i:i+2] == "{{" {
@@ -160,17 +159,17 @@ func (q CustomQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 			continue
 		}
 		if i+3 <= len(format) && format[i:i+3] == "{*}" {
-			splitAt = len(q.format) - len(format[i:])
+			splitAt = len(q.Format) - len(format[i:])
 			break
 		}
 		format = format[i+1:]
 	}
 	if splitAt < 0 {
-		return Writef(ctx, dialect, buf, args, params, q.format, q.values)
+		return Writef(ctx, dialect, buf, args, params, q.Format, q.Values)
 	}
 	runningValuesIndex := 0
 	ordinalIndices := make(map[int]int)
-	err = writef(ctx, dialect, buf, args, params, q.format[:splitAt], q.values, &runningValuesIndex, ordinalIndices)
+	err = writef(ctx, dialect, buf, args, params, q.Format[:splitAt], q.Values, &runningValuesIndex, ordinalIndices)
 	if err != nil {
 		return err
 	}
@@ -178,7 +177,7 @@ func (q CustomQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 	if err != nil {
 		return err
 	}
-	err = writef(ctx, dialect, buf, args, params, q.format[splitAt+3:], q.values, &runningValuesIndex, ordinalIndices)
+	err = writef(ctx, dialect, buf, args, params, q.Format[splitAt+3:], q.Values, &runningValuesIndex, ordinalIndices)
 	if err != nil {
 		return err
 	}
@@ -187,7 +186,7 @@ func (q CustomQuery) WriteSQL(ctx context.Context, dialect string, buf *bytes.Bu
 
 // SetFetchableFields sets the fetchable fields of the query.
 func (q CustomQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	format := q.format
+	format := q.Format
 	for i := strings.IndexByte(format, '{'); i >= 0; i = strings.IndexByte(format, '{') {
 		if i+2 <= len(format) && format[i:i+2] == "{{" {
 			format = format[i+2:]
@@ -208,11 +207,11 @@ func (q CustomQuery) GetFetchableFields() []Field {
 }
 
 // GetDialect gets the dialect of the query.
-func (q CustomQuery) GetDialect() string { return q.dialect }
+func (q CustomQuery) GetDialect() string { return q.Dialect }
 
 // SetDialect sets the dialect of the query.
 func (q CustomQuery) SetDialect(dialect string) CustomQuery {
-	q.dialect = dialect
+	q.Dialect = dialect
 	return q
 }
 
