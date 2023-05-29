@@ -51,21 +51,36 @@ func writef(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any,
 	// values slice
 	namedIndex := make(map[string]int)
 	for i, value := range values {
+		var name string
 		switch arg := value.(type) {
 		case sql.NamedArg:
-			namedIndex[arg.Name] = i
+			name = arg.Name
 		case Parameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
+		case ArrayParameter:
+			name = arg.Name
 		case BinaryParameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
 		case BooleanParameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
+		case EnumParameter:
+			name = arg.Name
+		case JSONParameter:
+			name = arg.Name
 		case NumberParameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
 		case StringParameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
 		case TimeParameter:
-			namedIndex[arg.Name] = i
+			name = arg.Name
+		case UUIDParameter:
+			name = arg.Name
+		}
+		if name != "" {
+			if _, ok := namedIndex[name]; ok {
+				return fmt.Errorf("named parameter {%s} provided more than once", name)
+			}
+			namedIndex[name] = i
 		}
 	}
 	buf.Grow(len(format))
@@ -816,7 +831,7 @@ func quoteTableColumns(dialect string, table Table) string {
 // Params is a shortcut for typing map[string]interface{}.
 type Params = map[string]any
 
-// Parameter functions as an sql.NamedArg, but implements the Field interface.
+// Parameter is identical to sql.NamedArg, but implements the Field interface.
 type Parameter sql.NamedArg
 
 var _ Field = (*Parameter)(nil)
@@ -831,13 +846,32 @@ func (p Parameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buff
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p Parameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p Parameter) IsField() {}
 
-// BinaryParameter functions as an sql.NamedArg, but implements the Binary
+// ArrayParameter is identical to sql.NamedArg, but implements the Array interface.
+type ArrayParameter sql.NamedArg
+
+var _ Field = (*ArrayParameter)(nil)
+
+// ArrayParam creates a new ArrayParameter. It wraps the value with
+// ArrayValue().
+func ArrayParam(name string, value any) ArrayParameter {
+	return ArrayParameter{Name: name, Value: ArrayValue(value)}
+}
+
+// WriteSQL implements the SQLWriter interface.
+func (p ArrayParameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
+}
+
+// IsField implements the Field interface.
+func (p ArrayParameter) IsField() {}
+
+// IsArray implements the Array interface.
+func (p ArrayParameter) IsArray() {}
+
+// BinaryParameter is identical to sql.NamedArg, but implements the Binary
 // interface.
 type BinaryParameter sql.NamedArg
 
@@ -853,16 +887,13 @@ func (p BinaryParameter) WriteSQL(ctx context.Context, dialect string, buf *byte
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p BinaryParameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p BinaryParameter) IsField() {}
 
 // IsBinary implements the Binary interface.
 func (p BinaryParameter) IsBinary() {}
 
-// BooleanParameter functions as an sql.NamedArg, but implements the Boolean
+// BooleanParameter is identical to sql.NamedArg, but implements the Boolean
 // interface.
 type BooleanParameter sql.NamedArg
 
@@ -878,16 +909,57 @@ func (p BooleanParameter) WriteSQL(ctx context.Context, dialect string, buf *byt
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p BooleanParameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p BooleanParameter) IsField() {}
 
 // IsBoolean implements the Boolean interface.
 func (p BooleanParameter) IsBoolean() {}
 
-// NumberParameter functions as an sql.NamedArg, but implements the Number
+// EnumParameter is identical to sql.NamedArg, but implements the Enum
+// interface.
+type EnumParameter sql.NamedArg
+
+var _ Field = (*EnumParameter)(nil)
+
+// EnumParam creates a new EnumParameter. It wraps the value with EnumValue().
+func EnumParam(name string, value Enumeration) EnumParameter {
+	return EnumParameter{Name: name, Value: EnumValue(value)}
+}
+
+// WriteSQL implements the SQLWriter interface.
+func (p EnumParameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
+}
+
+// IsField implements the Field interface.
+func (p EnumParameter) IsField() {}
+
+// IsEnum implements the Enum interface.
+func (p EnumParameter) IsEnum() {}
+
+// JSONParameter is identical to sql.NamedArg, but implements the JSON
+// interface.
+type JSONParameter sql.NamedArg
+
+var _ Field = (*JSONParameter)(nil)
+
+// JSONParam creates a new JSONParameter. It wraps the value with JSONValue().
+func JSONParam(name string, value any) JSONParameter {
+	return JSONParameter{Name: name, Value: JSONValue(value)}
+}
+
+// WriteSQL implements the SQLWriter interface.
+func (p JSONParameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
+}
+
+// IsField implements the Field interface.
+func (p JSONParameter) IsField() {}
+
+// IsJSON implements the JSON interface.
+func (p JSONParameter) IsJSON() {}
+
+// NumberParameter is identical to sql.NamedArg, but implements the Number
 // interface.
 type NumberParameter sql.NamedArg
 
@@ -913,16 +985,13 @@ func (p NumberParameter) WriteSQL(ctx context.Context, dialect string, buf *byte
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p NumberParameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p NumberParameter) IsField() {}
 
 // IsNumber implements the Number interface.
 func (p NumberParameter) IsNumber() {}
 
-// StringParameter functions as an sql.NamedArg, but implements the String
+// StringParameter is identical to sql.NamedArg, but implements the String
 // interface.
 type StringParameter sql.NamedArg
 
@@ -938,16 +1007,13 @@ func (p StringParameter) WriteSQL(ctx context.Context, dialect string, buf *byte
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p StringParameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p StringParameter) IsField() {}
 
 // IsString implements the String interface.
 func (p StringParameter) IsString() {}
 
-// TimeParameter functions as an sql.NamedArg, but implements the Time
+// TimeParameter is identical to sql.NamedArg, but implements the Time
 // interface.
 type TimeParameter sql.NamedArg
 
@@ -963,14 +1029,33 @@ func (p TimeParameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.
 	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
 }
 
-// GetAlias implements the Field interface.
-func (p TimeParameter) GetAlias() string { return "" }
-
 // IsField implements the Field interface.
 func (p TimeParameter) IsField() {}
 
 // IsTime implements the Time interface.
 func (p TimeParameter) IsTime() {}
+
+// UUIDParameter is identical to sql.NamedArg, but implements the UUID
+// interface.
+type UUIDParameter sql.NamedArg
+
+var _ Field = (*UUIDParameter)(nil)
+
+// UUIDParam creates a new UUIDParameter. It wraps the value with UUIDValue().
+func UUIDParam(name string, value any) UUIDParameter {
+	return UUIDParameter{Name: name, Value: UUIDValue(value)}
+}
+
+// WriteSQL implements the SQLWriter interface.
+func (p UUIDParameter) WriteSQL(ctx context.Context, dialect string, buf *bytes.Buffer, args *[]any, params map[string][]int) error {
+	return writeNamedArg(ctx, dialect, buf, args, params, sql.NamedArg(p))
+}
+
+// IsField implements the Field interface.
+func (p UUIDParameter) IsField() {}
+
+// IsUUID implements the UUID interface.
+func (p UUIDParameter) IsUUID() {}
 
 // SQLite keyword reference: https://www.sqlite.org/lang_keywords.html
 var sqliteKeywords = map[string]struct{}{

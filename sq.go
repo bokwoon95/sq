@@ -486,14 +486,16 @@ type uuidValue struct {
 
 // Value implements the driver.Valuer interface.
 func (v *uuidValue) Value() (driver.Value, error) {
-	value := reflect.ValueOf(v.value)
-	typ := value.Type()
-	if value.Kind() != reflect.Array || value.Len() != 16 || typ.Elem().Kind() != reflect.Uint8 {
-		return nil, fmt.Errorf("%[1]v %[1]T is not [16]byte", v.value)
-	}
-	var uuid [16]byte
-	for i := 0; i < value.Len(); i++ {
-		uuid[i] = value.Index(i).Interface().(byte)
+	uuid, ok := v.value.([16]byte)
+	if !ok {
+		value := reflect.ValueOf(v.value)
+		typ := value.Type()
+		if value.Kind() != reflect.Array || value.Len() != 16 || typ.Elem().Kind() != reflect.Uint8 {
+			return nil, fmt.Errorf("%[1]v %[1]T is not [16]byte", v.value)
+		}
+		for i := 0; i < value.Len(); i++ {
+			uuid[i] = value.Index(i).Interface().(byte)
+		}
 	}
 	if v.dialect != DialectPostgres {
 		return uuid[:], nil

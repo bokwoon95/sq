@@ -114,23 +114,35 @@ func TestWritef(t *testing.T) {
 		t.Parallel()
 		var tt TT
 		tt.format = "{param}, {param}" +
+			", {array}, {array}" +
 			", {bytes}, {bytes}" +
 			", {bool}, {bool}" +
+			", {enum}, {enum}" +
+			", {json}, {json}" +
 			", {int}, {int}" +
 			", {int64}, {float64}" +
 			", {string}, {string}" +
-			", {time}, {time}"
+			", {time}, {time}" +
+			", {uuid}, {uuid}"
 		tt.values = []any{
 			Param("param", nil),
+			ArrayParam("array", []int{1, 2, 3}),
 			BytesParam("bytes", []byte{0xFF, 0xFF, 0xFF}),
 			BoolParam("bool", true),
+			EnumParam("enum", Monday),
+			JSONParam("json", map[string]string{"lorem": "ipsum"}),
 			IntParam("int", 5),
 			Int64Param("int64", 7),
 			Float64Param("float64", 11.0),
 			StringParam("string", "lorem ipsum"),
 			TimeParam("time", time.Unix(0, 0)),
+			UUIDParam("uuid", [16]byte{0xa4, 0xf9, 0x52, 0xf1, 0x4c, 0x45, 0x4e, 0x63, 0xbd, 0x4e, 0x15, 0x9c, 0xa3, 0x3c, 0x8e, 0x20}),
 		}
 		tt.wantQuery = "?, ?" +
+			", ?, ?" +
+			", ?, ?" +
+			", ?, ?" +
+			", ?, ?" +
 			", ?, ?" +
 			", ?, ?" +
 			", ?, ?" +
@@ -139,24 +151,55 @@ func TestWritef(t *testing.T) {
 			", ?, ?"
 		tt.wantArgs = []any{
 			nil, nil,
+			"[1,2,3]", "[1,2,3]",
 			[]byte{0xFF, 0xFF, 0xFF}, []byte{0xFF, 0xFF, 0xFF},
 			true, true,
+			"Monday", "Monday",
+			`{"lorem":"ipsum"}`, `{"lorem":"ipsum"}`,
 			5, 5,
 			int64(7), float64(11.0),
 			"lorem ipsum", "lorem ipsum",
 			time.Unix(0, 0), time.Unix(0, 0),
+			[]byte{0xa4, 0xf9, 0x52, 0xf1, 0x4c, 0x45, 0x4e, 0x63, 0xbd, 0x4e, 0x15, 0x9c, 0xa3, 0x3c, 0x8e, 0x20},
+			[]byte{0xa4, 0xf9, 0x52, 0xf1, 0x4c, 0x45, 0x4e, 0x63, 0xbd, 0x4e, 0x15, 0x9c, 0xa3, 0x3c, 0x8e, 0x20},
 		}
 		tt.wantParams = map[string][]int{
 			"param":   {0, 1},
-			"bytes":   {2, 3},
-			"bool":    {4, 5},
-			"int":     {6, 7},
-			"int64":   {8},
-			"float64": {9},
-			"string":  {10, 11},
-			"time":    {12, 13},
+			"array":   {2, 3},
+			"bytes":   {4, 5},
+			"bool":    {6, 7},
+			"enum":    {8, 9},
+			"json":    {10, 11},
+			"int":     {12, 13},
+			"int64":   {14},
+			"float64": {15},
+			"string":  {16, 17},
+			"time":    {18, 19},
+			"uuid":    {20, 21},
 		}
 		assert(t, tt)
+	})
+
+	t.Run("duplicate params should error", func(t *testing.T) {
+		t.Parallel()
+		var tt TT
+		tt.format = "{param}, {param}"
+		tt.values = []any{
+			Param("param", 1),
+			Param("param", 1),
+		}
+		var buf bytes.Buffer
+		var args []any
+		params := make(map[string][]int)
+		format := "{param}, {param}"
+		values := []any{
+			Param("param", 1),
+			Param("param", 1),
+		}
+		err := Writef(context.Background(), "", &buf, &args, params, format, values)
+		if err == nil {
+			t.Errorf(testutil.Callers() + " expected error but got nil")
+		}
 	})
 
 	t.Run("sqlite,postgres QuoteIdentifier", func(t *testing.T) {
