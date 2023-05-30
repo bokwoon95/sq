@@ -529,7 +529,7 @@ func preprocessValue(dialect string, value any) (any, error) {
 		}
 		return driverValue, nil
 	case [16]byte:
-		driverValue, err := (&uuidValue{value: value}).Value()
+		driverValue, err := (&uuidValue{dialect: dialect, value: value}).Value()
 		if err != nil {
 			if dialect == DialectPostgres {
 				return nil, fmt.Errorf("converting %#v to string: %w", value, err)
