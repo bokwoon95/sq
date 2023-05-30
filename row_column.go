@@ -571,12 +571,14 @@ func (row *Row) UUIDField(destPtr any, field UUID) {
 
 func (row *Row) uuid(destPtr any, field UUID, skip int) {
 	if row.sqlRows == nil {
-		if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
-			panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
-		}
-		destValue := reflect.ValueOf(destPtr).Elem()
-		if destValue.Kind() != reflect.Array || destValue.Len() != 16 || destValue.Type().Elem().Kind() != reflect.Uint8 {
-			panic(fmt.Errorf(callsite(skip+1)+"%T is not a pointer to a [16]byte", destPtr))
+		if _, ok := destPtr.(*[16]byte); !ok {
+			if reflect.TypeOf(destPtr).Kind() != reflect.Ptr {
+				panic(fmt.Errorf(callsite(skip+1)+"cannot pass in non pointer value (%#v) as destPtr", destPtr))
+			}
+			destValue := reflect.ValueOf(destPtr).Elem()
+			if destValue.Kind() != reflect.Array || destValue.Len() != 16 || destValue.Type().Elem().Kind() != reflect.Uint8 {
+				panic(fmt.Errorf(callsite(skip+1)+"%T is not a pointer to a [16]byte", destPtr))
+			}
 		}
 		row.fields = append(row.fields, field)
 		row.scanDest = append(row.scanDest, &nullBytes{
