@@ -1156,9 +1156,6 @@ func (field TimeField) Setf(format string, values ...any) Assignment {
 // SetTime returns an Assignment assigning a time.Time to the field.
 func (field TimeField) SetTime(t time.Time) Assignment { return Set(field, t) }
 
-// SetTimestamp returns an Assignment assigning a Timestamp to the field.
-func (field TimeField) SetTimestamp(t Timestamp) Assignment { return Set(field, t) }
-
 // GetAlias returns the alias of the TimeField.
 func (field TimeField) GetAlias() string { return field.alias }
 
