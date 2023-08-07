@@ -61,16 +61,6 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("ctx.Done", func(t *testing.T) {
-		t.Parallel()
-		var tt TT
-		var cancel context.CancelFunc
-		tt.ctx, cancel = context.WithTimeout(context.Background(), 0)
-		defer cancel()
-		tt.wantOutput = ""
-		assert(t, tt)
-	})
-
 	t.Run("no color", func(t *testing.T) {
 		var tt TT
 		tt.config.NoColor = true

@@ -19,6 +19,9 @@ var (
 	errForbiddenCalls   = fmt.Errorf("rowmapper can only contain calls to row.Values()/row.Columns()/row.ColumnTypes() because query's SELECT clause is not dynamic")
 )
 
+// Default dialect used by all queries (if no dialect is explicitly provided).
+var DefaultDialect atomic.Pointer[string]
+
 // A Cursor represents a database cursor.
 type Cursor[T any] struct {
 	ctx           context.Context
@@ -53,6 +56,12 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 		return nil, fmt.Errorf("rowmapper is nil")
 	}
 	dialect := query.GetDialect()
+	if dialect == "" {
+		defaultDialect := DefaultDialect.Load()
+		if defaultDialect != nil {
+			dialect = *defaultDialect
+		}
+	}
 	cursor = &Cursor[T]{
 		ctx:       ctx,
 		rowmapper: rowmapper,
@@ -94,7 +103,18 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 	}
 
 	// Setup logger.
-	if cursor.logger, ok = db.(SqLogger); ok {
+	cursor.logger, _ = db.(SqLogger)
+	if cursor.logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			cursor.logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
+	if cursor.logger != nil {
 		cursor.logger.SqLogSettings(ctx, &cursor.logSettings)
 		if cursor.logSettings.IncludeCaller {
 			cursor.queryStats.CallerFile, cursor.queryStats.CallerLine, cursor.queryStats.CallerFunction = caller(skip + 1)
@@ -279,6 +299,12 @@ func CompileFetchContext[T any](ctx context.Context, query Query, rowmapper func
 		return nil, fmt.Errorf("rowmapper is nil")
 	}
 	dialect := query.GetDialect()
+	if dialect == "" {
+		defaultDialect := DefaultDialect.Load()
+		if defaultDialect != nil {
+			dialect = *defaultDialect
+		}
+	}
 	compiledFetch = &CompiledFetch[T]{
 		dialect:   dialect,
 		params:    make(map[string][]int),
@@ -359,9 +385,19 @@ func (compiledFetch *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, p
 	}
 
 	// Setup logger.
-	var ok bool
 	cursor.queryStats.RowCount.Valid = true
-	if cursor.logger, ok = db.(SqLogger); ok {
+	cursor.logger, _ = db.(SqLogger)
+	if cursor.logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			cursor.logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
+	if cursor.logger != nil {
 		cursor.logger.SqLogSettings(ctx, &cursor.logSettings)
 		if cursor.logSettings.IncludeCaller {
 			cursor.queryStats.CallerFile, cursor.queryStats.CallerLine, cursor.queryStats.CallerFunction = caller(skip + 1)
@@ -466,6 +502,16 @@ func (compiledFetch *CompiledFetch[T]) PrepareContext(ctx context.Context, db DB
 		return nil, err
 	}
 	preparedFetch.logger, _ = db.(SqLogger)
+	if preparedFetch.logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			preparedFetch.logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
 	return preparedFetch, nil
 }
 
@@ -631,6 +677,12 @@ func exec(ctx context.Context, db DB, query Query, skip int) (result Result, err
 		return result, fmt.Errorf("query is nil")
 	}
 	dialect := query.GetDialect()
+	if dialect == "" {
+		defaultDialect := DefaultDialect.Load()
+		if defaultDialect != nil {
+			dialect = *defaultDialect
+		}
+	}
 	queryStats := QueryStats{
 		Dialect: dialect,
 		Params:  make(map[string][]int),
@@ -648,7 +700,18 @@ func exec(ctx context.Context, db DB, query Query, skip int) (result Result, err
 
 	// Setup logger.
 	var logSettings LogSettings
-	if logger, ok := db.(SqLogger); ok {
+	logger, _ := db.(SqLogger)
+	if logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
+	if logger != nil {
 		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
 			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
@@ -707,6 +770,12 @@ func CompileExecContext(ctx context.Context, query Query) (*CompiledExec, error)
 		return nil, fmt.Errorf("query is nil")
 	}
 	dialect := query.GetDialect()
+	if dialect == "" {
+		defaultDialect := DefaultDialect.Load()
+		if defaultDialect != nil {
+			dialect = *defaultDialect
+		}
+	}
 	compiledExec := &CompiledExec{
 		dialect: dialect,
 		params:  make(map[string][]int),
@@ -747,7 +816,18 @@ func (compiledExec *CompiledExec) exec(ctx context.Context, db DB, params Params
 
 	// Setup logger.
 	var logSettings LogSettings
-	if logger, ok := db.(SqLogger); ok {
+	logger, _ := db.(SqLogger)
+	if logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
+	if logger != nil {
 		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
 			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)
@@ -815,6 +895,16 @@ func (compiledExec *CompiledExec) PrepareContext(ctx context.Context, db DB) (*P
 		return nil, err
 	}
 	preparedExec.logger, _ = db.(SqLogger)
+	if preparedExec.logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			preparedExec.logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
 	return preparedExec, nil
 }
 
@@ -1018,6 +1108,12 @@ func FetchExistsContext(ctx context.Context, db DB, query Query) (exists bool, e
 
 func fetchExists(ctx context.Context, db DB, query Query, skip int) (exists bool, err error) {
 	dialect := query.GetDialect()
+	if dialect == "" {
+		defaultDialect := DefaultDialect.Load()
+		if defaultDialect != nil {
+			dialect = *defaultDialect
+		}
+	}
 	queryStats := QueryStats{
 		Dialect: dialect,
 		Exists:  sql.NullBool{Valid: true},
@@ -1041,7 +1137,18 @@ func fetchExists(ctx context.Context, db DB, query Query, skip int) (exists bool
 
 	// Setup logger.
 	var logSettings LogSettings
-	if logger, ok := db.(SqLogger); ok {
+	logger, _ := db.(SqLogger)
+	if logger == nil {
+		logQuery, _ := defaultLogQuery.Load().(func(context.Context, QueryStats))
+		if logQuery != nil {
+			logSettings, _ := defaultLogSettings.Load().(func(context.Context, *LogSettings))
+			logger = &sqLogStruct{
+				logSettings: logSettings,
+				logQuery:    logQuery,
+			}
+		}
+	}
+	if logger != nil {
 		logger.SqLogSettings(ctx, &logSettings)
 		if logSettings.IncludeCaller {
 			queryStats.CallerFile, queryStats.CallerLine, queryStats.CallerFunction = caller(skip + 1)

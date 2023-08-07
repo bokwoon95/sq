@@ -1,6 +1,6 @@
 module github.com/bokwoon95/sq
 
-go 1.18
+go 1.19
 
 require (
 	github.com/denisenkom/go-mssqldb v0.12.3

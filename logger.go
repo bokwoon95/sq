@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -66,10 +67,10 @@ type QueryStats struct {
 // LogSettings are the various log settings taken into account when producing
 // the QueryStats.
 type LogSettings struct {
-	LogAsynchronously bool
-	IncludeTime       bool
-	IncludeCaller     bool
-	IncludeResults    int
+	LogAsynchronously bool // Dispatch logging asynchronously (logs may arrive out of order which can be confusing, but it won't block function calls).
+	IncludeTime       bool // Include timeTaken.
+	IncludeCaller     bool // Include caller (filename and line number).
+	IncludeResults    int  // Include fetched results.
 }
 
 // SqLogger represents a logger for the sq package.
@@ -130,11 +131,6 @@ func (l *sqLogger) SqLogSettings(ctx context.Context, settings *LogSettings) {
 
 // SqLogQuery implements the SqLogger interface.
 func (l *sqLogger) SqLogQuery(ctx context.Context, queryStats QueryStats) {
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
 	var reset, red, green, blue, purple string
 	envNoColor, _ := strconv.ParseBool(os.Getenv("NO_COLOR"))
 	if !l.config.NoColor && !envNoColor {
@@ -228,6 +224,44 @@ func VerboseLog(db DB) interface {
 		DB
 		SqLogger
 	}{DB: db, SqLogger: verboseLogger}
+}
+
+var defaultLogSettings atomic.Value
+
+// SetDefaultLogSettings sets the function to configure the default
+// LogSettings. This value is not used unless SetDefaultLogQuery is also
+// configured.
+func SetDefaultLogSettings(logSettings func(context.Context, *LogSettings)) {
+	defaultLogSettings.Store(logSettings)
+}
+
+var defaultLogQuery atomic.Value
+
+// SetDefaultLogQuery sets the default logging function to call for all
+// queries.
+func SetDefaultLogQuery(logQuery func(context.Context, QueryStats)) {
+	defaultLogQuery.Store(logQuery)
+}
+
+type sqLogStruct struct {
+	logSettings func(context.Context, *LogSettings)
+	logQuery    func(context.Context, QueryStats)
+}
+
+var _ SqLogger = (*sqLogStruct)(nil)
+
+func (l *sqLogStruct) SqLogSettings(ctx context.Context, logSettings *LogSettings) {
+	if l.logSettings == nil {
+		return
+	}
+	l.logSettings(ctx, logSettings)
+}
+
+func (l *sqLogStruct) SqLogQuery(ctx context.Context, queryStats QueryStats) {
+	if l.logQuery == nil {
+		return
+	}
+	l.logQuery(ctx, queryStats)
 }
 
 const (

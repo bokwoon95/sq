@@ -21,7 +21,7 @@ Notable features:
 
 # Installation
 
-This package only supports Go 1.18 and above.
+This package only supports Go 1.19 and above.
 
 ```shell
 $ go get github.com/bokwoon95/sq
