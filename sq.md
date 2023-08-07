@@ -2524,7 +2524,7 @@ first_name: 'MORGAN'
 
 To log every query without manually wrapping it in sq.Log(), set the global logger using SetDefaultLogQuery(). It takes in a callback function which is called everytime a query is called (if no logger was explicitly provided to FetchOne, FetchAll, Exec, etc).
 
-```
+```go
 func init() {
     logger := sq.NewLogger(os.Stdout, "", log.LstdFlags, sq.LoggerConfig{
         ShowTimeTaken: true,
