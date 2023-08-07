@@ -357,6 +357,19 @@ sq.MySQL.Queryf(query)     // sq.Queryf(query).SetDialect(sq.DialectMySQL)
 sq.SQLServer.Queryf(query) // sq.Queryf(query).SetDialect(sq.DialectSQLServer)
 ```
 
+### Setting the query dialect globally #set-query-dialect-globally
+
+To set the default dialect globally, set the value of sq.DefaultDialect. This
+value is used when no dialect is provided (i.e. an empty string).
+
+```go
+func init() {
+    // Sets the default dialect of all queries to Postgres (unless a dialect is
+    // explicitly provided).
+    sq.DefaultDialect.Store(&sq.DialectPostgres)
+}
+```
+
 ## sq's query templating syntax #templating-syntax
 
 sq.Queryf (and sq.Expr) use a Printf-style templating syntax where the format string uses curly brace `{}` placeholders. Here is a basic example for Queryf:
@@ -2509,50 +2522,22 @@ first_name: 'MORGAN'
 
 ### Logging without manual sq.Log() wrapping #logging-without-manual-wrapping
 
-To log every query without manually wrapping it in sq.Log(), create a custom DB type that implements the `SqLogger` interface. This is what sq.Log() and sq.VerboseLog() do.
+To log every query without manually wrapping it in sq.Log(), set the global logger using SetDefaultLogQuery(). It takes in a callback function which is called everytime a query is called (if no logger was explicitly provided to FetchOne, FetchAll, Exec, etc).
 
-```go
-type SqLogger interface {
-    SqLogSettings(context.Context, *LogSettings)
-    SqLogQuery(context.Context, QueryStats)
-}
 ```
-
-Here is an example, using a custom DB struct that embeds \*sql.DB and using the logger provided by sq.NewLogger().
-
-```go
-type MyDB struct {
-    *sql.DB
+func init() {
+    logger := sq.NewLogger(os.Stdout, "", log.LstdFlags, sq.LoggerConfig{
+        ShowTimeTaken: true,
+        HideArgs:      true,
+    })
+    sq.SetDefaultLogQuery(func(ctx context.Context, queryStats sq.QueryStats) {
+        // You can choose to only log queries if they encountered an error.
+        // if queryStats.Err == nil {
+        //     return
+        // }
+        logger.SqLogQuery(ctx, queryStats)
+    })
 }
-
-var logger = sq.NewLogger(os.Stdout, "", log.Lshortflags, sq.LoggerConfig{
-    ShowTimeTaken: true,
-    HideArgs:      true,
-})
-
-func (db MyDB) SqLogSettings(ctx context.Context, settings *sq.LogSettings) {
-    logger.SqLogSettings(ctx, settings)
-}
-
-func (db MyDB) SqLogQuery(ctx context.Context, stats sq.QueryStats) {
-    logger.SqLogQuery(ctx, stats)
-}
-
-actors, err := sq.FetchAll(myDB, sq.
-    Queryf("SELECT {*} FROM actor WHERE first_name = {}", "DAN").
-    SetDialect(sq.DialectPostgres),
-    func(row *sq.Row) Actor {
-        return Actor{
-            ActorID:   row.Int("actor_id"),
-            FirstName: row.String("first_name"),
-            LastName:  row.String("last_name"),
-        }
-    },
-)
-```
-
-```shell
-2022/02/06 15:34:36 [OK] SELECT actor_id, first_name, last_name FROM actor WHERE first_name = $1 | timeTaken=9.834µs rowCount=3
 ```
 
 ### Custom logger #custom-logger

@@ -238,7 +238,7 @@ func SetDefaultLogSettings(logSettings func(context.Context, *LogSettings)) {
 var defaultLogQuery atomic.Value
 
 // SetDefaultLogQuery sets the default logging function to call for all
-// queries.
+// queries (if a logger is not explicitly passed in).
 func SetDefaultLogQuery(logQuery func(context.Context, QueryStats)) {
 	defaultLogQuery.Store(logQuery)
 }
