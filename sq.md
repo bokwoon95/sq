@@ -645,6 +645,44 @@ sq.Select(a.FIRST_NAME, a.LAST_NAME).From(a).Where(a.ACTOR_ID.In([]int{18, 56, 1
 // SELECT a.first_name, a.last_name FROM actor AS a WHERE a.actor_id IN (18, 56, 116)
 ```
 
+#### Model structs #model-structs
+
+In general, there should be two types of structs that you use with the query builder. One is the table struct, which represents an instance of an SQL table. The other is a model struct, which represents an instance of a domain model (in this example, an actor).
+
+```
+// Table struct (represents your SQL table).
+type ACTOR struct {
+    sq.TableStruct sq:"Actor"
+    ACTOR_ID       sq.NumberField sq:"ActorID"
+    FIRST_NAME     sq.StringField sq:"FirstName"
+    LAST_NAME      sq.StringField sq:"LastName"
+    LAST_UPDATE    sq.TimeField   sq:"LastUpdate"
+}
+
+// Model struct (represents an instance of an actor).
+type Actor struct {
+    ActorID    int
+    FirstName  string
+    LastName   string
+    LastUpdate time.Time
+}
+
+// Note the different casing of ACTOR vs Actor.
+a := sq.New[ACTOR]("a")
+actors, err := sq.FetchAll(db, sq.
+    From(a).
+    Where(a.FIRST_NAME.EqString("DAN")).
+    SetDialect(sq.DialectPostgres),
+    func(row *sq.Row) Actor {
+        return Actor{
+            ActorID:   row.IntField(a.ACTOR_ID),
+            FirstName: row.StringField(a.FIRST_NAME),
+            LastName:  row.StringField(a.LAST_NAME),
+        }
+    },
+)
+```
+
 ### Available Field types #field-types
 
 There are 10 available field types that you can use in your [table structs](#table-structs).
