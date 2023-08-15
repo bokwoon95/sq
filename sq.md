@@ -649,7 +649,7 @@ sq.Select(a.FIRST_NAME, a.LAST_NAME).From(a).Where(a.ACTOR_ID.In([]int{18, 56, 1
 
 In general, there should be two types of structs that you use with the query builder. One is the table struct, which represents an instance of an SQL table. The other is a model struct, which represents an instance of a domain model (in this example, an actor).
 
-```
+```go
 // Table struct (represents your SQL table).
 type ACTOR struct {
     sq.TableStruct sq:"Actor"
