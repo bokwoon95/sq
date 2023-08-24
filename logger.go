@@ -67,10 +67,17 @@ type QueryStats struct {
 // LogSettings are the various log settings taken into account when producing
 // the QueryStats.
 type LogSettings struct {
-	LogAsynchronously bool // Dispatch logging asynchronously (logs may arrive out of order which can be confusing, but it won't block function calls).
-	IncludeTime       bool // Include timeTaken.
-	IncludeCaller     bool // Include caller (filename and line number).
-	IncludeResults    int  // Include fetched results.
+	// Dispatch logging asynchronously (logs may arrive out of order which can be confusing, but it won't block function calls).
+	LogAsynchronously bool
+
+	// Include time taken by the query.
+	IncludeTime bool
+
+	// Include caller (filename and line number).
+	IncludeCaller bool
+
+	// Include fetched results.
+	IncludeResults int
 }
 
 // SqLogger represents a logger for the sq package.
@@ -90,13 +97,31 @@ type sqLogger struct {
 
 // LoggerConfig is the config used for the sq logger.
 type LoggerConfig struct {
-	LogAsynchronously  bool
-	ShowTimeTaken      bool
-	ShowCaller         bool
-	ShowResults        int
-	NoColor            bool
+	// Dispatch logging asynchronously (logs may arrive out of order which can be confusing, but it won't block function calls).
+	LogAsynchronously bool
+
+	// Show time taken by the query.
+	ShowTimeTaken bool
+
+	// Show caller (filename and line number).
+	ShowCaller bool
+
+	// Show fetched results.
+	ShowResults int
+
+	// If true, logs are shown as plaintext (no color).
+	NoColor bool
+
+	// Verbose query interpolation, which shows the query before and after
+	// interpolating query arguments. The logged query is interpolated by
+	// default, InterpolateVerbose only controls whether the query before
+	// interpolation is shown. To disable query interpolation entirely, look at
+	// HideArgs.
 	InterpolateVerbose bool
-	HideArgs           bool
+
+	// Explicitly hides arguments when logging the query (only the query
+	// placeholders will be shown).
+	HideArgs bool
 }
 
 var _ SqLogger = (*sqLogger)(nil)
