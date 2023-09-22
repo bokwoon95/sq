@@ -40,15 +40,29 @@ import (
 // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx and
 // urn:uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx are decoded.
 func ParseBytes(b []byte) (uuid [16]byte, err error) {
-	if len(b) != 36 {
-		if len(b) != 36+9 {
-			return uuid, fmt.Errorf("invalid UUID length: %d", len(b))
-		}
+	switch len(b) {
+	case 36: // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	case 36 + 9: // urn:uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 		if !bytes.Equal(bytes.ToLower(b[:9]), []byte("urn:uuid:")) {
 			return uuid, fmt.Errorf("invalid urn prefix: %q", b[:9])
 		}
 		b = b[9:]
+	case 36 + 2: // {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+		b = b[1:]
+	case 32: // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+		var ok bool
+		for i := 0; i < 32; i += 2 {
+			uuid[i/2], ok = xtob(b[i], b[i+1])
+			if !ok {
+				return uuid, errors.New("invalid UUID format")
+			}
+		}
+		return uuid, nil
+	default:
+		return uuid, fmt.Errorf("invalid UUID length: %d", len(b))
 	}
+	// s is now at least 36 bytes long
+	// it must be of the form  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 	if b[8] != '-' || b[13] != '-' || b[18] != '-' || b[23] != '-' {
 		return uuid, errors.New("invalid UUID format")
 	}
@@ -57,7 +71,8 @@ func ParseBytes(b []byte) (uuid [16]byte, err error) {
 		9, 11,
 		14, 16,
 		19, 21,
-		24, 26, 28, 30, 32, 34} {
+		24, 26, 28, 30, 32, 34,
+	} {
 		v, ok := xtob(b[x], b[x+1])
 		if !ok {
 			return uuid, errors.New("invalid UUID format")
@@ -85,7 +100,8 @@ func Parse(s string) (uuid [16]byte, err error) {
 		9, 11,
 		14, 16,
 		19, 21,
-		24, 26, 28, 30, 32, 34} {
+		24, 26, 28, 30, 32, 34,
+	} {
 		v, ok := xtob(s[x], s[x+1])
 		if !ok {
 			return uuid, errors.New("invalid UUID format")
