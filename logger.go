@@ -176,11 +176,27 @@ func (l *sqLogger) SqLogQuery(ctx context.Context, queryStats QueryStats) {
 	if l.config.HideArgs {
 		buf.WriteString(" " + queryStats.Query + ";")
 	} else if !l.config.InterpolateVerbose {
-		query, err := Sprintf(queryStats.Dialect, queryStats.Query, queryStats.Args)
-		if err != nil {
-			query += " " + err.Error()
+		if queryStats.Err != nil {
+			buf.WriteString(" " + queryStats.Query + ";")
+			if len(queryStats.Args) > 0 {
+				buf.WriteString(" [")
+			}
+			for i := 0; i < len(queryStats.Args); i++ {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				buf.WriteString(fmt.Sprintf("%#v", queryStats.Args[i]))
+			}
+			if len(queryStats.Args) > 0 {
+				buf.WriteString("]")
+			}
+		} else {
+			query, err := Sprintf(queryStats.Dialect, queryStats.Query, queryStats.Args)
+			if err != nil {
+				query += " " + err.Error()
+			}
+			buf.WriteString(" " + query + ";")
 		}
-		buf.WriteString(" " + query + ";")
 	}
 	if queryStats.Err != nil {
 		errStr := queryStats.Err.Error()
