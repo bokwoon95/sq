@@ -486,6 +486,9 @@ type uuidValue struct {
 
 // Value implements the driver.Valuer interface.
 func (v *uuidValue) Value() (driver.Value, error) {
+	if v.value == nil {
+		return nil, nil
+	}
 	uuid, ok := v.value.([16]byte)
 	if !ok {
 		value := reflect.ValueOf(v.value)
