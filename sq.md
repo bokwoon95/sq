@@ -748,7 +748,7 @@ a2.ACTOR_ID             // actor.actor_id
 
 #### Generating migrations #generating-migrations
 
-> Example: here is [the table struct representation](https://github.com/bokwoon95/sqddl/blob/main/ddl/testdata/tables.go) of the [sakila database schema](https://www.jooq.org/sakila).
+> Example: here is [the table struct representation](https://github.com/bokwoon95/sqddl/blob/main/ddl/testdata/tables.go.txt) of the [sakila database schema](https://www.jooq.org/sakila).
 
 Your [table structs](#table-structs) serve as a declarative schema for your tables. The [sqddl tool](https://bokwoon.neocities.org/sqddl.html) is able to parse Go files containing table structs and [generate the necessary migrations](https://bokwoon.neocities.org/sqddl.html#generate) needed to reach that desired schema. The generated migrations can then be [applied using the same sqddl tool](https://bokwoon.neocities.org/sqddl.html#migrate).
 
