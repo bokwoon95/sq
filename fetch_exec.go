@@ -70,6 +70,7 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 		},
 		queryStats: QueryStats{
 			Dialect:  dialect,
+			Params:   make(map[string][]int),
 			RowCount: sql.NullInt64{Valid: true},
 		},
 	}
@@ -1115,6 +1116,7 @@ func fetchExists(ctx context.Context, db DB, query Query, skip int) (exists bool
 	}
 	queryStats := QueryStats{
 		Dialect: dialect,
+		Params:  make(map[string][]int),
 		Exists:  sql.NullBool{Valid: true},
 	}
 
