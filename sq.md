@@ -366,7 +366,11 @@ value is used when no dialect is provided (i.e. an empty string).
 func init() {
     // Sets the default dialect of all queries to Postgres (unless a dialect is
     // explicitly provided).
-    sq.DefaultDialect.Store(&sq.DialectPostgres)
+    //
+    // NOTE: You can't use a pointer to sq.DialectPostgres directly because it is
+    // a constant which cannot be addressed.
+    dialect := sq.DialectPostgres
+    sq.DefaultDialect.Store(&dialect)
 }
 ```
 
