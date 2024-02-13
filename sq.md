@@ -656,11 +656,11 @@ In general, there should be two types of structs that you use with the query bui
 ```go
 // Table struct (represents your SQL table).
 type ACTOR struct {
-    sq.TableStruct sq:"Actor"
-    ACTOR_ID       sq.NumberField sq:"ActorID"
-    FIRST_NAME     sq.StringField sq:"FirstName"
-    LAST_NAME      sq.StringField sq:"LastName"
-    LAST_UPDATE    sq.TimeField   sq:"LastUpdate"
+    sq.TableStruct `sq:"Actor"`
+    ACTOR_ID       sq.NumberField `sq:"ActorID"`
+    FIRST_NAME     sq.StringField `sq:"FirstName"`
+    LAST_NAME      sq.StringField `sq:"LastName"`
+    LAST_UPDATE    sq.TimeField   `sq:"LastUpdate"`
 }
 
 // Model struct (represents an instance of an actor).
