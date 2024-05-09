@@ -26,8 +26,13 @@ func TestSQLiteSelectQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.ACTOR_ID})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.SelectFields = q1.SelectFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.ACTOR_ID})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 
@@ -102,8 +107,13 @@ func TestPostgresSelectQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.ACTOR_ID})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.SelectFields = q1.SelectFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.ACTOR_ID})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 
@@ -213,8 +223,13 @@ func TestMySQLSelectQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.ACTOR_ID})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.SelectFields = q1.SelectFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.ACTOR_ID})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 
@@ -309,8 +324,13 @@ func TestSQLServerSelectQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.ACTOR_ID})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.SelectFields = q1.SelectFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.ACTOR_ID})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 

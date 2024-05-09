@@ -410,8 +410,11 @@ func (q SelectQuery) Field(name string) AnyField {
 
 // SetFetchableFields implements the Query interface.
 func (q SelectQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.SelectFields = fields
-	return q, true
+	if len(q.SelectFields) == 0 {
+		q.SelectFields = fields
+		return q, true
+	}
+	return q, false
 }
 
 // GetFetchableFields returns the fetchable fields of the query.
@@ -626,8 +629,11 @@ func (q SQLiteSelectQuery) Field(name string) AnyField {
 
 // SetFetchableFields implements the Query interface.
 func (q SQLiteSelectQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.SelectFields = fields
-	return q, true
+	if len(q.SelectFields) == 0 {
+		q.SelectFields = fields
+		return q, true
+	}
+	return q, false
 }
 
 // GetFetchableFields returns the fetchable fields of the query.
@@ -882,8 +888,11 @@ func (q PostgresSelectQuery) Field(name string) AnyField {
 
 // SetFetchableFields implements the Query interface.
 func (q PostgresSelectQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.SelectFields = fields
-	return q, true
+	if len(q.SelectFields) == 0 {
+		q.SelectFields = fields
+		return q, true
+	}
+	return q, false
 }
 
 // GetFetchableFields returns the fetchable fields of the query.
@@ -1120,8 +1129,11 @@ func (q MySQLSelectQuery) Field(name string) AnyField {
 
 // SetFetchableFields implements the Query interface.
 func (q MySQLSelectQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.SelectFields = fields
-	return q, true
+	if len(q.SelectFields) == 0 {
+		q.SelectFields = fields
+		return q, true
+	}
+	return q, false
 }
 
 // GetFetchableFields returns the fetchable fields of the query.
@@ -1363,8 +1375,11 @@ func (q SQLServerSelectQuery) Field(name string) AnyField {
 
 // SetFetchableFields implements the Query interface.
 func (q SQLServerSelectQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
-	q.SelectFields = fields
-	return q, true
+	if len(q.SelectFields) == 0 {
+		q.SelectFields = fields
+		return q, true
+	}
+	return q, false
 }
 
 // GetFetchableFields returns the fetchable fields of the query.

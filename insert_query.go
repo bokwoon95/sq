@@ -259,8 +259,11 @@ func (c ConflictClause) WriteSQL(ctx context.Context, dialect string, buf *bytes
 func (q InsertQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
 	switch q.Dialect {
 	case DialectPostgres, DialectSQLite:
-		q.ReturningFields = fields
-		return q, true
+		if len(q.ReturningFields) == 0 {
+			q.ReturningFields = fields
+			return q, true
+		}
+		return q, false
 	default:
 		return q, false
 	}

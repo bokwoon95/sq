@@ -209,8 +209,11 @@ func (q DeleteQuery) Where(predicates ...Predicate) DeleteQuery {
 func (q DeleteQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
 	switch q.Dialect {
 	case DialectPostgres, DialectSQLite:
-		q.ReturningFields = fields
-		return q, true
+		if len(q.ReturningFields) == 0 {
+			q.ReturningFields = fields
+			return q, true
+		}
+		return q, false
 	default:
 		return q, false
 	}

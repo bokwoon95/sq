@@ -220,8 +220,11 @@ func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 func (q UpdateQuery) SetFetchableFields(fields []Field) (query Query, ok bool) {
 	switch q.Dialect {
 	case DialectPostgres, DialectSQLite:
-		q.ReturningFields = fields
-		return q, true
+		if len(q.ReturningFields) == 0 {
+			q.ReturningFields = fields
+			return q, true
+		}
+		return q, false
 	default:
 		return q, false
 	}

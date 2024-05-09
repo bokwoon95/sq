@@ -28,8 +28,13 @@ func TestSQLiteUpdateQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.LAST_NAME})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.ReturningFields = q1.ReturningFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.LAST_NAME})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 
@@ -125,8 +130,13 @@ func TestPostgresUpdateQuery(t *testing.T) {
 			t.Error(testutil.Callers(), diff)
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.LAST_NAME})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.ReturningFields = q1.ReturningFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.LAST_NAME})
 		if !ok {
-			t.Fatal(testutil.Callers(), "not ok")
+			t.Fatal(testutil.Callers(), "field should have been set")
 		}
 	})
 
@@ -225,7 +235,12 @@ func TestMySQLUpdateQuery(t *testing.T) {
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.LAST_NAME})
 		if ok {
-			t.Error(testutil.Callers(), "expected not ok but got ok")
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.ReturningFields = q1.ReturningFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.LAST_NAME})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
 		}
 	})
 
@@ -324,7 +339,12 @@ func TestSQLServerUpdateQuery(t *testing.T) {
 		}
 		_, ok := q1.SetFetchableFields([]Field{a.LAST_NAME})
 		if ok {
-			t.Error(testutil.Callers(), "expected not ok but got ok")
+			t.Fatal(testutil.Callers(), "field should not have been set")
+		}
+		q1.ReturningFields = q1.ReturningFields[:0]
+		_, ok = q1.SetFetchableFields([]Field{a.LAST_NAME})
+		if ok {
+			t.Fatal(testutil.Callers(), "field should not have been set")
 		}
 	})
 
