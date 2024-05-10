@@ -2,7 +2,6 @@ package sq
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -294,6 +293,8 @@ func TestRow(t *testing.T) {
 			defer func() {
 				db.Exec(tt.teardown)
 			}()
+
+			// Insert the data.
 			result, err := Exec(Log(db), InsertInto(TABLE00).
 				ColumnValues(func(col *Column) {
 					for _, value := range table00Values {
@@ -326,6 +327,7 @@ func TestRow(t *testing.T) {
 				t.Error(testutil.Callers(), diff)
 			}
 
+			// Fetch the data.
 			values, err := FetchAll(VerboseLog(db), From(TABLE00).
 				OrderBy(TABLE00.UUID).
 				SetDialect(tt.dialect),
@@ -349,6 +351,11 @@ func TestRow(t *testing.T) {
 					value.score = row.Int64Field(TABLE00.SCORE)
 					value.name = row.StringField(TABLE00.NAME)
 					value.updatedAt = row.TimeField(TABLE00.UPDATED_AT)
+					// make sure Columns, ColumnTypes and Values are all
+					// callable inside the rowmapper even for dynamic queries.
+					fmt.Println(row.Columns())
+					fmt.Println(row.ColumnTypes())
+					fmt.Println(row.Values())
 					return value
 				},
 			)
@@ -380,51 +387,6 @@ func TestRowScan(t *testing.T) {
 		{123, int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
 		{456, int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
 		{789, int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
-	}
-
-	query := Queryf("" +
-		"SELECT {*}" +
-		" FROM table01" +
-		" WHERE id IS NOT NULL" +
-		" ORDER BY id",
-	)
-
-	rowmapper := func(row *Row) []any {
-		var id int
-		var score1 int64
-		var score2 int32
-		var price float64
-		var name string
-		var isActive bool
-		var updatedAt time.Time
-		row.Scan(&id, "id")
-		row.Scan(&score1, "score")
-		row.Scan(&score2, "score")
-		if diff := testutil.Diff(score1, int64(score2)); diff != "" {
-			panic(fmt.Errorf(testutil.Callers() + diff))
-		}
-		row.Scan(&price, "price")
-		row.Scan(&name, "name")
-		row.Scan(&isActive, "is_active")
-		row.Scan(&updatedAt, "updated_at")
-		return []any{id, score1, price, name, isActive, updatedAt}
-	}
-
-	queryRawSQL := Queryf("" +
-		"SELECT id, score, price, name, is_active, updated_at" +
-		" FROM table01" +
-		" WHERE id IS NOT NULL" +
-		" ORDER BY id",
-	)
-
-	rowmapperRawSQL := func(row *Row) []any {
-		columns := row.Columns()
-		columnTypes := row.ColumnTypes()
-		values := row.Values()
-		if len(columns) != len(columnTypes) || len(columnTypes) != len(values) {
-			panic(fmt.Errorf(testutil.Callers()+" length of columns/columnTypes/values don't match: %v %v %v", columns, columnTypes, values))
-		}
-		return values
 	}
 
 	type TestTable struct {
@@ -535,124 +497,218 @@ func TestRowScan(t *testing.T) {
 				t.Error(testutil.Callers(), diff)
 			}
 
-			// Test the sql.NullXXX variants.
-			gotValue, err := FetchOne(db,
-				Queryf("SELECT {*} FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
-				func(row *Row) []any {
-					var id sql.NullInt64
-					var score1 sql.NullInt64
-					var score2 sql.NullInt32
-					var price sql.NullFloat64
-					var name sql.NullString
-					var isActive sql.NullBool
-					var updatedAt sql.NullTime
-					row.Scan(&id, "id")
-					row.Scan(&score1, "score")
-					row.Scan(&score2, "score")
-					if diff := testutil.Diff(score1.Int64, int64(score2.Int32)); diff != "" {
-						panic(fmt.Errorf(testutil.Callers() + diff))
-					}
-					row.Scan(&price, "price")
-					row.Scan(&name, "name")
-					row.Scan(&isActive, "is_active")
-					row.Scan(&updatedAt, "updated_at")
-					return []any{int(id.Int64), score1.Int64, price.Float64, name.String, isActive.Bool, updatedAt.Time}
-				},
-			)
-			if err != nil {
-				t.Fatal(testutil.Callers(), err)
-			}
-			if diff := testutil.Diff(gotValue, []any{int(0), int64(0), float64(0), "", false, time.Time{}}); diff != "" {
-				t.Error(testutil.Callers(), diff)
-			}
-
-			// (Normal Query) Get the row with all NULL values and assert it is
-			// all nil.
-			gotValue, err = FetchOne(db,
-				Queryf("SELECT {*} FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
-				rowmapper,
-			)
-			if err != nil {
-				t.Fatal(testutil.Callers(), err)
-			}
-			wantValue := []any{int(0), int64(0), float64(0), "", false, time.Time{}}
-			if diff := testutil.Diff(gotValue, wantValue); diff != "" {
-				t.Error(testutil.Callers(), diff)
-			}
-
-			// (Raw SQL Query) Get the row with all NULL values and assert it
-			// is all nil.
-			gotValue, err = FetchOne(db,
-				Queryf("SELECT id, score, price, name, is_active, updated_at FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
-				rowmapperRawSQL,
-			)
-			if err != nil {
-				t.Fatal(testutil.Callers(), err)
-			}
-			if diff := testutil.Diff(gotValue, []any{nil, nil, nil, nil, nil, nil}); diff != "" {
-				t.Error(testutil.Callers(), diff)
-			}
-
-			// Mixing both kinds of rowmappers should return an error.
-			_, err = FetchAll(db, query.SetDialect(tt.dialect), func(row *Row) []any {
-				rowmapper(row)
-				rowmapperRawSQL(row)
-				return nil
+			t.Run("dynamic SQL query", func(t *testing.T) {
+				gotValues, err := FetchAll(db,
+					Queryf("SELECT {*} FROM table01 WHERE id IS NOT NULL ORDER BY id").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						var id int
+						var score1 int64
+						var score2 int32
+						var price float64
+						var name string
+						var isActive bool
+						var updatedAt time.Time
+						row.Scan(&id, "id")
+						row.Scan(&score1, "score")
+						row.Scan(&score2, "score")
+						if diff := testutil.Diff(score1, int64(score2)); diff != "" {
+							panic(fmt.Errorf(testutil.Callers() + diff))
+						}
+						row.Scan(&price, "price")
+						row.Scan(&name, "name")
+						row.Scan(&isActive, "is_active")
+						row.Scan(&updatedAt, "updated_at")
+						return []any{id, score1, price, name, isActive, updatedAt}
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				wantValues := [][]any{
+					{123, int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
+					{456, int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
+					{789, int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
+				}
+				if diff := testutil.Diff(gotValues, wantValues); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
 			})
-			if !errors.Is(err, errMixedCalls) {
-				t.Errorf(testutil.Callers()+" expected %v, got %v", errMixedCalls, err)
-			}
 
-			// Normal query with raw SQL rowmapper should return an error.
-			_, err = FetchAll(db, query.SetDialect(tt.dialect), rowmapperRawSQL)
-			if !errors.Is(err, errNoFieldsAccessed) {
-				t.Errorf(testutil.Callers()+" expected %v, got %v", errNoFieldsAccessed, err)
-			}
-
-			// Raw SQL query with normal rowmapper should return an error.
-			_, err = FetchAll(db, queryRawSQL.SetDialect(tt.dialect), rowmapper)
-			if !errors.Is(err, errForbiddenCalls) {
-				t.Errorf(testutil.Callers()+" expected %v, got %v", errForbiddenCalls, err)
-			}
-
-			// Normal query with normal rowmapper returns the right values.
-			gotValues, err := FetchAll(db, query.SetDialect(tt.dialect), rowmapper)
-			if err != nil {
-				t.Fatal(testutil.Callers(), err)
-			}
-			wantValues := [][]any{
-				{123, int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
-				{456, int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
-				{789, int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
-			}
-			if diff := testutil.Diff(gotValues, wantValues); diff != "" {
-				t.Error(testutil.Callers(), diff)
-			}
-
-			// Raw SQL query with raw SQL rowmapper (we need to tweak the
-			// wantValues because we are at the mercy of whatever the database
-			// driver decides to return).
-			gotValues, err = FetchAll(db, queryRawSQL.SetDialect(tt.dialect), rowmapperRawSQL)
-			if err != nil {
-				t.Fatal(testutil.Callers(), err)
-			}
-			switch tt.dialect {
-			case DialectSQLite, DialectPostgres, DialectSQLServer:
-				wantValues = [][]any{
-					{int64(123), int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
-					{int64(456), int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
-					{int64(789), int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
+			t.Run("dynamic SQL query (null values)", func(t *testing.T) {
+				gotValue, err := FetchOne(db,
+					Queryf("SELECT {*} FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						var id int
+						var score1 int64
+						var score2 int32
+						var price float64
+						var name string
+						var isActive bool
+						var updatedAt time.Time
+						row.Scan(&id, "id")
+						row.Scan(&score1, "score")
+						row.Scan(&score2, "score")
+						if diff := testutil.Diff(score1, int64(score2)); diff != "" {
+							panic(fmt.Errorf(testutil.Callers() + diff))
+						}
+						row.Scan(&price, "price")
+						row.Scan(&name, "name")
+						row.Scan(&isActive, "is_active")
+						row.Scan(&updatedAt, "updated_at")
+						return []any{id, score1, price, name, isActive, updatedAt}
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
 				}
-			case DialectMySQL:
-				wantValues = [][]any{
-					{[]byte("123"), []byte("123"), []byte("123"), []byte("abc"), []byte("1"), time.Unix(123, 0).UTC()},
-					{[]byte("456"), []byte("456"), []byte("456"), []byte("def"), []byte("1"), time.Unix(456, 0).UTC()},
-					{[]byte("789"), []byte("789"), []byte("789"), []byte("ghi"), []byte("1"), time.Unix(789, 0).UTC()},
+				wantValue := []any{int(0), int64(0), float64(0), "", false, time.Time{}}
+				if diff := testutil.Diff(gotValue, wantValue); diff != "" {
+					t.Error(testutil.Callers(), diff)
 				}
-			}
-			if diff := testutil.Diff(gotValues, wantValues); diff != "" {
-				t.Error(testutil.Callers(), diff)
-			}
+			})
+
+			t.Run("dynamic SQL query (null values) (using sql.Null structs)", func(t *testing.T) {
+				gotValue, err := FetchOne(db,
+					Queryf("SELECT {*} FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						var id sql.NullInt64
+						var score1 sql.NullInt64
+						var score2 sql.NullInt32
+						var price sql.NullFloat64
+						var name sql.NullString
+						var isActive sql.NullBool
+						var updatedAt sql.NullTime
+						row.Scan(&id, "id")
+						row.Scan(&score1, "score")
+						row.Scan(&score2, "score")
+						if diff := testutil.Diff(score1.Int64, int64(score2.Int32)); diff != "" {
+							panic(fmt.Errorf(testutil.Callers() + diff))
+						}
+						row.Scan(&price, "price")
+						row.Scan(&name, "name")
+						row.Scan(&isActive, "is_active")
+						row.Scan(&updatedAt, "updated_at")
+						return []any{int(id.Int64), score1.Int64, price.Float64, name.String, isActive.Bool, updatedAt.Time}
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				wantValue := []any{int(0), int64(0), float64(0), "", false, time.Time{}}
+				if diff := testutil.Diff(gotValue, wantValue); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
+			})
+
+			t.Run("static SQL query", func(t *testing.T) {
+				// Raw SQL query with.
+				gotValues, err := FetchAll(Log(db),
+					Queryf("SELECT id, score, price, name, is_active, updated_at FROM table01 WHERE id IS NOT NULL ORDER BY id").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						return []any{
+							row.Int("id"),
+							row.Int64("score"),
+							row.Float64("price"),
+							row.String("name"),
+							row.Bool("is_active"),
+							row.Time("updated_at"),
+						}
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				wantValues := [][]any{
+					{123, int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
+					{456, int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
+					{789, int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
+				}
+				if diff := testutil.Diff(gotValues, wantValues); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
+			})
+
+			t.Run("static SQL query (raw Values)", func(t *testing.T) {
+				gotValues, err := FetchAll(db,
+					Queryf("SELECT id, score, price, name, is_active, updated_at FROM table01 WHERE id IS NOT NULL ORDER BY id").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						columns := row.Columns()
+						columnTypes := row.ColumnTypes()
+						values := row.Values()
+						if len(columns) != len(columnTypes) || len(columnTypes) != len(values) {
+							panic(fmt.Errorf(testutil.Callers()+" length of columns/columnTypes/values don't match: %v %v %v", columns, columnTypes, values))
+						}
+						return values
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				// We need to tweak wantValues depending on the dialect because
+				// we are at the mercy of whatever that dialect's database
+				// driver decides to return.
+				var wantValues [][]any
+				switch tt.dialect {
+				case DialectSQLite, DialectPostgres, DialectSQLServer:
+					wantValues = [][]any{
+						{int64(123), int64(123), float64(123), "abc", true, time.Unix(123, 0).UTC()},
+						{int64(456), int64(456), float64(456), "def", true, time.Unix(456, 0).UTC()},
+						{int64(789), int64(789), float64(789), "ghi", true, time.Unix(789, 0).UTC()},
+					}
+				case DialectMySQL:
+					wantValues = [][]any{
+						{[]byte("123"), []byte("123"), []byte("123"), []byte("abc"), []byte("1"), time.Unix(123, 0).UTC()},
+						{[]byte("456"), []byte("456"), []byte("456"), []byte("def"), []byte("1"), time.Unix(456, 0).UTC()},
+						{[]byte("789"), []byte("789"), []byte("789"), []byte("ghi"), []byte("1"), time.Unix(789, 0).UTC()},
+					}
+				}
+				if diff := testutil.Diff(gotValues, wantValues); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
+			})
+
+			t.Run("static SQL query (null values)", func(t *testing.T) {
+				gotValue, err := FetchOne(db,
+					Queryf("SELECT id, score, price, name, is_active, updated_at FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						columns := row.Columns()
+						columnTypes := row.ColumnTypes()
+						values := row.Values()
+						if len(columns) != len(columnTypes) || len(columnTypes) != len(values) {
+							panic(fmt.Errorf(testutil.Callers()+" length of columns/columnTypes/values don't match: %v %v %v", columns, columnTypes, values))
+						}
+						return values
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				if diff := testutil.Diff(gotValue, []any{nil, nil, nil, nil, nil, nil}); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
+			})
+
+			t.Run("static SQL query (null values) (using sql.Null structs)", func(t *testing.T) {
+				gotValue, err := FetchOne(db,
+					Queryf("SELECT id, score, price, name, is_active, updated_at FROM table01 WHERE id IS NULL").SetDialect(tt.dialect),
+					func(row *Row) []any {
+						return []any{
+							row.NullInt64("score"),
+							row.NullFloat64("price"),
+							row.NullString("name"),
+							row.NullBool("is_active"),
+							row.NullTime("updated_at"),
+						}
+					},
+				)
+				if err != nil {
+					t.Fatal(testutil.Callers(), err)
+				}
+				wantValues := []any{sql.NullInt64{}, sql.NullFloat64{}, sql.NullString{}, sql.NullBool{}, sql.NullTime{}}
+				if diff := testutil.Diff(gotValue, wantValues); diff != "" {
+					t.Error(testutil.Callers(), diff)
+				}
+			})
 		})
 	}
 }

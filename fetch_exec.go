@@ -13,12 +13,6 @@ import (
 	"time"
 )
 
-var (
-	errMixedCalls       = fmt.Errorf("rowmapper cannot mix calls to row.Values()/row.Columns()/row.ColumnTypes() with the other row methods")
-	errNoFieldsAccessed = fmt.Errorf("rowmapper did not access any fields, unable to determine fields to insert into query")
-	errForbiddenCalls   = fmt.Errorf("rowmapper can only contain calls to row.Values()/row.Columns()/row.ColumnTypes() because query's SELECT clause is not dynamic")
-)
-
 // Default dialect used by all queries (if no dialect is explicitly provided).
 var DefaultDialect atomic.Pointer[string]
 
@@ -62,11 +56,14 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 			dialect = *defaultDialect
 		}
 	}
+	// If we can't set the fetchable fields, the query is static.
+	_, ok := query.SetFetchableFields(nil)
 	cursor = &Cursor[T]{
 		ctx:       ctx,
 		rowmapper: rowmapper,
 		row: &Row{
-			dialect: dialect,
+			dialect:       dialect,
+			queryIsStatic: !ok,
 		},
 		queryStats: QueryStats{
 			Dialect:  dialect,
@@ -75,21 +72,12 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 		},
 	}
 
-	// Call the rowmapper to populate row.fields and row.scanDest.
-	defer mapperFunctionPanicked(&err)
-	_ = cursor.rowmapper(cursor.row)
-	var ok bool
-	if cursor.row.rawSQLMode && len(cursor.row.fields) > 0 {
-		return nil, errMixedCalls
-	}
-
-	// Insert the fields into the query.
-	query, ok = query.SetFetchableFields(cursor.row.fields)
-	if ok && len(cursor.row.fields) == 0 {
-		return nil, errNoFieldsAccessed
-	}
-	if !ok && len(cursor.row.fields) > 0 {
-		return nil, errForbiddenCalls
+	// If the query is dynamic, call the rowmapper to populate row.fields and
+	// row.scanDest. Then, insert those fields back into the query.
+	if !cursor.row.queryIsStatic {
+		defer mapperFunctionPanicked(&err)
+		_ = cursor.rowmapper(cursor.row)
+		query, _ = query.SetFetchableFields(cursor.row.fields)
 	}
 
 	// Build query.
@@ -134,6 +122,29 @@ func fetchCursor[T any](ctx context.Context, db DB, query Query, rowmapper func(
 		return nil, cursor.queryStats.Err
 	}
 
+	// If the query is static, we now know the number of columns returned by
+	// the query and can allocate the values slice and scanDest slice for
+	// scanning later.
+	if cursor.row.queryIsStatic {
+		cursor.row.columns, err = cursor.row.sqlRows.Columns()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnTypes, err = cursor.row.sqlRows.ColumnTypes()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnIndex = make(map[string]int)
+		for index, column := range cursor.row.columns {
+			cursor.row.columnIndex[column] = index
+		}
+		cursor.row.values = make([]any, len(cursor.row.columns))
+		cursor.row.scanDest = make([]any, len(cursor.row.columns))
+		for index := range cursor.row.values {
+			cursor.row.scanDest[index] = &cursor.row.values[index]
+		}
+	}
+
 	// Allocate the resultsBuffer.
 	if cursor.logSettings.IncludeResults > 0 {
 		cursor.resultsBuffer = bufpool.Get().(*bytes.Buffer)
@@ -158,13 +169,11 @@ func (cursor *Cursor[T]) RowCount() int64 { return cursor.queryStats.RowCount.In
 
 // Result returns the cursor result.
 func (cursor *Cursor[T]) Result() (result T, err error) {
-	if !cursor.row.rawSQLMode {
-		err = cursor.row.sqlRows.Scan(cursor.row.scanDest...)
-		if err != nil {
-			cursor.log()
-			fieldMappings := getFieldMappings(cursor.queryStats.Dialect, cursor.row.fields, cursor.row.scanDest)
-			return result, fmt.Errorf("please check if your mapper function is correct:%s\n%w", fieldMappings, err)
-		}
+	err = cursor.row.sqlRows.Scan(cursor.row.scanDest...)
+	if err != nil {
+		cursor.log()
+		fieldMappings := getFieldMappings(cursor.queryStats.Dialect, cursor.row.fields, cursor.row.scanDest)
+		return result, fmt.Errorf("please check if your mapper function is correct:%s\n%w", fieldMappings, err)
 	}
 	// If results should be logged, write the row into the resultsBuffer.
 	if cursor.resultsBuffer != nil && cursor.queryStats.RowCount.Int64 <= int64(cursor.logSettings.IncludeResults) {
@@ -187,7 +196,7 @@ func (cursor *Cursor[T]) Result() (result T, err error) {
 			cursor.resultsBuffer.WriteString(rhs)
 		}
 	}
-	cursor.row.index = 0
+	cursor.row.runningIndex = 0
 	defer mapperFunctionPanicked(&err)
 	result = cursor.rowmapper(cursor.row)
 	return result, nil
@@ -272,6 +281,10 @@ type CompiledFetch[T any] struct {
 	args      []any
 	params    map[string][]int
 	rowmapper func(*Row) T
+	// if queryIsStatic is true, the rowmapper doesn't actually know what
+	// columns are in the query and it must be determined at runtime after
+	// running the query.
+	queryIsStatic bool
 }
 
 // NewCompiledFetch returns a new CompiledFetch.
@@ -305,30 +318,25 @@ func CompileFetchContext[T any](ctx context.Context, query Query, rowmapper func
 			dialect = *defaultDialect
 		}
 	}
+	// If we can't set the fetchable fields, the query is static.
+	_, ok := query.SetFetchableFields(nil)
 	compiledFetch = &CompiledFetch[T]{
-		dialect:   dialect,
-		params:    make(map[string][]int),
-		rowmapper: rowmapper,
+		dialect:       dialect,
+		params:        make(map[string][]int),
+		rowmapper:     rowmapper,
+		queryIsStatic: !ok,
 	}
 	row := &Row{
-		dialect: dialect,
+		dialect:       dialect,
+		queryIsStatic: !ok,
 	}
 
-	// Call the rowmapper to populate row.fields.
-	defer mapperFunctionPanicked(&err)
-	_ = rowmapper(row)
-	var ok bool
-	if row.rawSQLMode && len(row.fields) > 0 {
-		return nil, errMixedCalls
-	}
-
-	// Insert the fields into the query.
-	query, ok = query.SetFetchableFields(row.fields)
-	if ok && len(row.fields) == 0 {
-		return nil, errNoFieldsAccessed
-	}
-	if !ok && len(row.fields) > 0 {
-		return nil, errForbiddenCalls
+	// If the query is dynamic, call the rowmapper to populate row.fields.
+	// Then, insert those fields back into the query.
+	if !row.queryIsStatic {
+		defer mapperFunctionPanicked(&err)
+		_ = rowmapper(row)
+		query, _ = query.SetFetchableFields(row.fields)
 	}
 
 	// Build query.
@@ -361,7 +369,8 @@ func (compiledFetch *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, p
 		ctx:       ctx,
 		rowmapper: compiledFetch.rowmapper,
 		row: &Row{
-			dialect: compiledFetch.dialect,
+			dialect:       compiledFetch.dialect,
+			queryIsStatic: compiledFetch.queryIsStatic,
 		},
 		queryStats: QueryStats{
 			Dialect: compiledFetch.dialect,
@@ -372,10 +381,9 @@ func (compiledFetch *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, p
 	}
 
 	// Call the rowmapper to populate row.scanDest.
-	defer mapperFunctionPanicked(&err)
-	_ = cursor.rowmapper(cursor.row)
-	if err != nil {
-		return nil, err
+	if !cursor.row.queryIsStatic {
+		defer mapperFunctionPanicked(&err)
+		_ = cursor.rowmapper(cursor.row)
 	}
 
 	// Substitute params.
@@ -414,6 +422,29 @@ func (compiledFetch *CompiledFetch[T]) fetchCursor(ctx context.Context, db DB, p
 	}
 	if cursor.queryStats.Err != nil {
 		return nil, cursor.queryStats.Err
+	}
+
+	// If the query is static, we now know the number of columns returned by
+	// the query and can allocate the values slice and scanDest slice for
+	// scanning later.
+	if cursor.row.queryIsStatic {
+		cursor.row.columns, err = cursor.row.sqlRows.Columns()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnTypes, err = cursor.row.sqlRows.ColumnTypes()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnIndex = make(map[string]int)
+		for index, column := range cursor.row.columns {
+			cursor.row.columnIndex[column] = index
+		}
+		cursor.row.values = make([]any, len(cursor.row.columns))
+		cursor.row.scanDest = make([]any, len(cursor.row.columns))
+		for index := range cursor.row.values {
+			cursor.row.scanDest[index] = &cursor.row.values[index]
+		}
 	}
 
 	// Allocate the resultsBuffer.
@@ -494,6 +525,7 @@ func (compiledFetch *CompiledFetch[T]) PrepareContext(ctx context.Context, db DB
 	preparedFetch := &PreparedFetch[T]{
 		compiledFetch: NewCompiledFetch(compiledFetch.GetSQL()),
 	}
+	preparedFetch.compiledFetch.queryIsStatic = compiledFetch.queryIsStatic
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
 	}
@@ -551,7 +583,8 @@ func (preparedFetch *PreparedFetch[T]) fetchCursor(ctx context.Context, params P
 		ctx:       ctx,
 		rowmapper: preparedFetch.compiledFetch.rowmapper,
 		row: &Row{
-			dialect: preparedFetch.compiledFetch.dialect,
+			dialect:       preparedFetch.compiledFetch.dialect,
+			queryIsStatic: preparedFetch.compiledFetch.queryIsStatic,
 		},
 		queryStats: QueryStats{
 			Dialect:  preparedFetch.compiledFetch.dialect,
@@ -563,11 +596,10 @@ func (preparedFetch *PreparedFetch[T]) fetchCursor(ctx context.Context, params P
 		logger: preparedFetch.logger,
 	}
 
-	// Call the rowmapper to populate row.scanDest.
-	defer mapperFunctionPanicked(&err)
-	_ = cursor.rowmapper(cursor.row)
-	if err != nil {
-		return nil, err
+	// If the query is dynamic, call the rowmapper to populate row.scanDest.
+	if !cursor.row.queryIsStatic {
+		defer mapperFunctionPanicked(&err)
+		_ = cursor.rowmapper(cursor.row)
 	}
 
 	// Substitute params.
@@ -594,6 +626,29 @@ func (preparedFetch *PreparedFetch[T]) fetchCursor(ctx context.Context, params P
 	}
 	if cursor.queryStats.Err != nil {
 		return nil, cursor.queryStats.Err
+	}
+
+	// If the query is static, we now know the number of columns returned by
+	// the query and can allocate the values slice and scanDest slice for
+	// scanning later.
+	if cursor.row.queryIsStatic {
+		cursor.row.columns, err = cursor.row.sqlRows.Columns()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnTypes, err = cursor.row.sqlRows.ColumnTypes()
+		if err != nil {
+			return nil, err
+		}
+		cursor.row.columnIndex = make(map[string]int)
+		for index, column := range cursor.row.columns {
+			cursor.row.columnIndex[column] = index
+		}
+		cursor.row.values = make([]any, len(cursor.row.columns))
+		cursor.row.scanDest = make([]any, len(cursor.row.columns))
+		for index := range cursor.row.values {
+			cursor.row.scanDest[index] = &cursor.row.values[index]
+		}
 	}
 
 	// Allocate the resultsBuffer.
@@ -648,7 +703,9 @@ func (preparedFetch *PreparedFetch[T]) FetchAllContext(ctx context.Context, para
 
 // GetCompiled returns a copy of the underlying CompiledFetch.
 func (preparedFetch *PreparedFetch[T]) GetCompiled() *CompiledFetch[T] {
-	return NewCompiledFetch(preparedFetch.compiledFetch.GetSQL())
+	compiledFetch := NewCompiledFetch(preparedFetch.compiledFetch.GetSQL())
+	compiledFetch.queryIsStatic = preparedFetch.compiledFetch.queryIsStatic
+	return compiledFetch
 }
 
 // Close closes the PreparedFetch.
@@ -1047,6 +1104,8 @@ func getFieldMappings(dialect string, fields []Field, scanDest []any) string {
 	}
 	return b.String()
 }
+
+// TODO: inline cursorResult, cursorResults and execResult.
 
 func cursorResult[T any](cursor *Cursor[T]) (result T, err error) {
 	for cursor.Next() {

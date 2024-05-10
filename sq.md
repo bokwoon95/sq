@@ -232,6 +232,26 @@ To go into greater detail, the rowmapper is first called in "passive mode" where
 
 **The order in which you call the `sq.Row` methods must be deterministic and must not change between rowmapper invocations**. Don't put an `row.Int()` call inside an if-block, for example.
 
+### Static vs dynamic queries #static-vs-dynamic-queries
+
+The [query examples in the quickstart](#rawsql-select) showcase dynamic queries, i.e. queries whose SELECT-ed fields are dynamically determined by the rowmapper. You can also write static queries, where the columns you SELECT are hardcoded into the query and the rowmapper references those fields by alias/name.
+
+```go
+actors, err := sq.FetchAll(db, sq.
+    Queryf("SELECT actor_id, first_name, last_name AS lname FROM actor WHERE first_name = {}", "DAN").
+    SetDialect(sq.DialectPostgres),
+    func(row *sq.Row) Actor {
+        fmt.Printf("%#v\n", row.Columns()) // []string{"actor_id", "first_name", "lname"}
+        fmt.Printf("%#v\n", row.Values())  // []any{18, "DAN", "TORN"}
+        return Actor{
+            ActorID:   row.Int("actor_id"),
+            FirstName: row.String("first_name"),
+            LastName:  row.String("lname"),
+        }
+    },
+)
+```
+
 ### Handling errors #rowmapper-handling-errors
 
 If you do any computation in a rowmapper that returns an error, you can panic() with it and the error will be propagated as the error return value of FetchAll/FetchOne/FetchCursor. Try not to do anything that returns an error in the rowmapper.
