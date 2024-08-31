@@ -18,16 +18,11 @@ import (
 
 // Row represents the state of a row after a call to rows.Next().
 type Row struct {
-	dialect      string
-	sqlRows      *sql.Rows
-	runningIndex int
-	fields       []Field
-	scanDest     []any
-
-	// TODO: call Values using the go-mysql driver and check what the driver
-	// returns for bool and time.Time (without calling parseTime). Then we need
-	// to accomodate those cases into []byte handling below.
-	// TODO: Then! we can finally take the new code for a spin.
+	dialect       string
+	sqlRows       *sql.Rows
+	runningIndex  int
+	fields        []Field
+	scanDest      []any
 	queryIsStatic bool
 	columns       []string
 	columnTypes   []*sql.ColumnType
@@ -1078,7 +1073,7 @@ func (row *Row) uuid(destPtr any, field UUID, skip int) {
 	var uuid [16]byte
 	if len(scanDest.bytes) == 16 {
 		copy(uuid[:], scanDest.bytes)
-	} else {
+	} else if len(scanDest.bytes) > 0 {
 		uuid, err = googleuuid.ParseBytes(scanDest.bytes)
 		if err != nil {
 			panic(fmt.Errorf(callsite(skip+1)+"parsing %q as UUID string: %w", string(scanDest.bytes), err))

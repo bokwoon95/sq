@@ -69,7 +69,7 @@ func TestRow(t *testing.T) {
 		dsn:      "file:/TestRow/sqlite?vfs=memdb&_foreign_keys=true",
 		teardown: "DROP TABLE IF EXISTS table00;",
 		setup: "CREATE TABLE table00 (" +
-			"\n    uuid UUID PRIMARY KEY" +
+			"\n    uuid UUID" +
 			"\n    ,data JSON" +
 			"\n    ,color TEXT" +
 			"\n    ,direction TEXT" +
@@ -100,7 +100,7 @@ func TestRow(t *testing.T) {
 			"\nCREATE TYPE direction AS ENUM ('north', 'south', 'east', 'west');" +
 			"\nCREATE TYPE weekday AS ENUM ('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday');" +
 			"\nCREATE TABLE table00 (" +
-			"\n    uuid UUID PRIMARY KEY" +
+			"\n    uuid UUID" +
 			"\n    ,data JSONB" +
 			"\n    ,color color" +
 			"\n    ,direction direction" +
@@ -125,7 +125,7 @@ func TestRow(t *testing.T) {
 		dsn:      *mysqlDSN,
 		teardown: "DROP TABLE IF EXISTS table00;",
 		setup: "CREATE TABLE table00 (" +
-			"\n    uuid BINARY(16) PRIMARY KEY" +
+			"\n    uuid BINARY(16)" +
 			"\n    ,data JSON" +
 			"\n    ,color VARCHAR(255)" +
 			"\n    ,direction VARCHAR(255)" +
@@ -150,7 +150,7 @@ func TestRow(t *testing.T) {
 		dsn:      *sqlserverDSN,
 		teardown: "DROP TABLE IF EXISTS table00;",
 		setup: "CREATE TABLE table00 (" +
-			"\n    uuid BINARY(16) PRIMARY KEY" +
+			"\n    uuid BINARY(16)" +
 			"\n    ,data NVARCHAR(MAX)" +
 			"\n    ,color NVARCHAR(255)" +
 			"\n    ,direction NVARCHAR(255)" +
@@ -376,6 +376,73 @@ func TestRow(t *testing.T) {
 			}
 			if !exists {
 				t.Errorf(testutil.Callers()+" expected row with uuid = %q to exist, got false", table00Values[0].uuid.String())
+			}
+
+			// SQLServer driver *still* doesn't support NULL UUIDs 🙄, skip
+			// NULL testing for SQL Server.
+			// https://github.com/denisenkom/go-mssqldb/issues/196
+			if tt.dialect == "sqlserver" {
+				return
+			}
+
+			// Insert NULLs.
+			_, err = Exec(Log(db), InsertInto(TABLE00).
+				ColumnValues(func(col *Column) {
+					col.Set(TABLE00.UUID, nil)
+					col.Set(TABLE00.DATA, nil)
+					col.Set(TABLE00.COLOR, nil)
+					col.Set(TABLE00.DIRECTION, nil)
+					col.Set(TABLE00.WEEKDAY, nil)
+					col.Set(TABLE00.TEXT_ARRAY, nil)
+					col.Set(TABLE00.INT_ARRAY, nil)
+					col.Set(TABLE00.INT64_ARRAY, nil)
+					col.Set(TABLE00.INT32_ARRAY, nil)
+					col.Set(TABLE00.FLOAT64_ARRAY, nil)
+					col.Set(TABLE00.FLOAT32_ARRAY, nil)
+					col.Set(TABLE00.BOOL_ARRAY, nil)
+					col.Set(TABLE00.BYTES, nil)
+					col.Set(TABLE00.IS_ACTIVE, nil)
+					col.Set(TABLE00.PRICE, nil)
+					col.Set(TABLE00.SCORE, nil)
+					col.Set(TABLE00.NAME, nil)
+					col.Set(TABLE00.UPDATED_AT, nil)
+				}).
+				SetDialect(tt.dialect),
+			)
+			if err != nil {
+				t.Fatal(testutil.Callers(), err)
+			}
+
+			// Fetch NULLs.
+			_, err = FetchAll(VerboseLog(db), From(TABLE00).
+				Where(TABLE00.UUID.IsNull()).
+				OrderBy(TABLE00.UUID).
+				SetDialect(tt.dialect),
+				func(row *Row) Table00 {
+					var value Table00
+					row.UUIDField(&value.uuid, TABLE00.UUID)
+					row.JSONField(&value.data, TABLE00.DATA)
+					row.EnumField(&value.color, TABLE00.COLOR)
+					row.EnumField(&value.direction, TABLE00.DIRECTION)
+					row.EnumField(&value.weekday, TABLE00.WEEKDAY)
+					row.ArrayField(&value.textArray, TABLE00.TEXT_ARRAY)
+					row.ArrayField(&value.intArray, TABLE00.INT_ARRAY)
+					row.ArrayField(&value.int64Array, TABLE00.INT64_ARRAY)
+					row.ArrayField(&value.int32Array, TABLE00.INT32_ARRAY)
+					row.ArrayField(&value.float64Array, TABLE00.FLOAT64_ARRAY)
+					row.ArrayField(&value.float32Array, TABLE00.FLOAT32_ARRAY)
+					row.ArrayField(&value.boolArray, TABLE00.BOOL_ARRAY)
+					value.bytes = row.BytesField(TABLE00.BYTES)
+					value.isActive = row.BoolField(TABLE00.IS_ACTIVE)
+					value.price = row.Float64Field(TABLE00.PRICE)
+					value.score = row.Int64Field(TABLE00.SCORE)
+					value.name = row.StringField(TABLE00.NAME)
+					value.updatedAt = row.TimeField(TABLE00.UPDATED_AT)
+					return value
+				},
+			)
+			if err != nil {
+				t.Fatal(testutil.Callers(), err)
 			}
 		})
 	}

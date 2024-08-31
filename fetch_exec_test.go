@@ -2,31 +2,12 @@ package sq
 
 import (
 	"database/sql"
-	"io"
-	"log"
 	"testing"
 	"time"
 
 	"github.com/bokwoon95/sq/internal/testutil"
 	_ "github.com/mattn/go-sqlite3"
 )
-
-func init() {
-	// For tests, silence the logger (the output is too noisy). If you need to
-	// see what queries are being run, comment this out.
-
-	defaultLogger = NewLogger(io.Discard, "", log.LstdFlags, LoggerConfig{
-		ShowTimeTaken: true,
-		ShowCaller:    true,
-		HideArgs:      true,
-	})
-	verboseLogger = NewLogger(io.Discard, "", log.LstdFlags, LoggerConfig{
-		ShowTimeTaken:      true,
-		ShowCaller:         true,
-		ShowResults:        5,
-		InterpolateVerbose: true,
-	})
-}
 
 var ACTOR = New[struct {
 	TableStruct `sq:"actor"`

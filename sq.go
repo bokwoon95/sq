@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -301,10 +300,7 @@ func writeFields(ctx context.Context, dialect string, buf *bytes.Buffer, args *[
 	return nil
 }
 
-// mapperFunctionPanicked recovers from any panics *except* for runtime error
-// panics. Runtime error panics like out-of-bounds index accesses or failed
-// type assertions are not normal so we don't want to swallow the stack trace
-// by recovering from it.
+// mapperFunctionPanicked recovers from any panics.
 //
 // The function is called as such so that it shows up as
 // "sq.mapperFunctionPanicked" in panic stack trace, giving the user a
@@ -313,9 +309,6 @@ func mapperFunctionPanicked(err *error) {
 	if r := recover(); r != nil {
 		switch r := r.(type) {
 		case error:
-			if runtimeErr, ok := r.(runtime.Error); ok {
-				panic(runtimeErr)
-			}
 			*err = r
 		default:
 			*err = fmt.Errorf(fmt.Sprint(r))
