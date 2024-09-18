@@ -984,7 +984,7 @@ INSERT INTO actor (actor_id, first_name, last_name) VALUES (18, 'DAN', 'TORN')
 a := sq.New[ACTOR]("")
 _, err := sq.Exec(db, sq.
     InsertInto(a).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetInt(a.ACTOR_ID, 18)
         col.SetString(a.FIRST_NAME, "DAN")
         col.SetString(a.LAST_NAME, "TORN")
@@ -1014,7 +1014,7 @@ actors := []Actor{
 a := sq.New[ACTOR]("")
 _, err := sq.Exec(db, sq.
     InsertInto(a).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         for _, actor := range actors {
             col.SetInt(a.ACTOR_ID, actor.ActorID)
             col.SetString(a.FIRST_NAME, actor.FirstName)
@@ -1034,7 +1034,7 @@ The Insert column mapper works by having the `sq.Column` note down the very firs
 a := sq.New[ACTOR]("")
 q := sq.
     InsertInto(a).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetInt(a.ACTOR_ID, 1) // every a.ACTOR_ID will mark the start of a new row value
         col.SetString(a.FIRST_NAME, "PENELOPE")
         col.SetString(a.LAST_NAME, "GUINESS")
@@ -1089,7 +1089,7 @@ UPDATE actor SET first_name = 'DAN', last_name = 'TORN' WHERE actor.actor_id = 1
 a := sq.New[ACTOR]("")
 _, err := sq.Exec(db, sq.
     Update(a).
-    SetFunc(func(col *sq.Column) error {
+    SetFunc(func(col *sq.Column) {
         col.SetString(a.FIRST_NAME, "DAN")
         col.SetString(a.LAST_NAME, "TORN")
         return nil
@@ -2226,7 +2226,7 @@ _, err := sq.Exec(db, sq.
 p := sq.New[POSTS]("")
 _, err := sq.Exec(db, sq.
     InsertInto(p).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetString(p.TITLE, "Hello World!")
         col.SetString(p.BODY, "This is my first blog post.")
         col.SetArray(p.TAGS, []string{"introduction", "hello-world", "meta"})
@@ -2341,7 +2341,7 @@ _, err := sq.Exec(db, sq.
 f := sq.New[FRUITS]("")
 _, err := sq.Exec(db, sq.
     InsertInto(f).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetString(f.NAME, "apple")
         col.SetEnum(f.COLOR, ColorRed)
     }).
@@ -2407,7 +2407,7 @@ _, err := sq.Exec(db, sq.
 p := sq.New[PRODUCTS]("")
 _, err := sq.Exec(db, sq.
     InsertInto(p).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetString(p.NAME, "Sleeping Bag")
         col.SetFloat64(p.PRICE, 89.99)
         col.SetJSON(p.ATTRIBUTES, map[string]any{
@@ -2488,7 +2488,7 @@ _, err = sq.Exec(db, sq.
 u := sq.New[USERS]("")
 _, err := sq.Exec(db, sq.
     InsertInto(u).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.SetUUID(u.USER_ID, userID)
         col.SetString(u.NAME, "John Doe")
         col.SetString(u.EMAIL, "john_doe@email.com")
@@ -2932,7 +2932,7 @@ type ACTOR struct {
 a := sq.New[ACTOR]("")
 compiledQuery, err = sq.CompileExec(sq.
     InsertInto(a).
-    ColumnValues(func(col *sq.Column) error {
+    ColumnValues(func(col *sq.Column) {
         col.Set(a.ACTOR_ID, sql.Named("actor_id", nil))     // actor_id is a rebindable param, with default value nil
         col.Set(a.FIRST_NAME, sql.Named("first_name", nil)) // first_name is a rebindable param, with default value nil
         col.Set(a.LAST_NAME, sql.Named("last_name", nil))   // last_name is a rebindable param, with default value nil
